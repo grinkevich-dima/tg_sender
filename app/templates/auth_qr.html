@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<article style="max-width:520px;margin:auto;text-align:center">
+<header><strong>Вход по QR-коду</strong></header>
+<div id="qr" style="background:#fff;padding:12px;display:inline-block;border-radius:8px">{{ svg|safe }}</div>
+<ol style="text-align:left;margin-top:1rem">
+  <li>Откройте <b>приложение Telegram</b> на телефоне (не обычную камеру)</li>
+  <li>Настройки → Устройства → <b>Подключить устройство</b></li>
+  <li>Наведите камеру на этот QR-код</li>
+</ol>
+<p id="st" class="muted">Ожидаю сканирования… QR обновляется автоматически каждые ~30 сек (всего 3 минуты)</p>
+<a href="/auth/qr" role="button" class="outline" id="again" style="display:none">Обновить QR</a>
+</article>
+<script>
+let v = {{ v }};
+async function poll(){
+  try{
+    const r = await fetch('/auth/qr/status?v='+v); const j = await r.json();
+    if(j.svg){ document.getElementById('qr').innerHTML = j.svg; v = j.v; }
+    if(j.status==='ok' || j.status==='password'){ location.href='/auth/qr/done'; return; }
+    if(j.status==='expired' || j.status.startsWith('error')){
+      document.getElementById('st').textContent = j.status==='expired' ? 'QR-код истёк' : j.status;
+      document.getElementById('again').style.display='inline-block'; return; }
+  }catch(e){}
+  setTimeout(poll, 2000);
+}
+poll();
+</script>
+{% endblock %}

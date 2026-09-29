@@ -1,0 +1,10 @@
+services:
+  tg-sender:
+    build: .
+    env_file: .env
+    ports: ["127.0.0.1:8000:8000"]   # наружу не открываем
+    volumes:
+      - ./data:/app/data
+      - ./app:/app/app                # код подхватывается без пересборки
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
+    restart: unless-stopped

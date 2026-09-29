@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid">
+<article>
+  <header><strong>Импорт из Telegram</strong></header>
+  <form method="post" action="/contacts/import-tg">
+    <select name="source">
+      <option value="contacts">Записная книжка Telegram</option>
+      <option value="dialogs">Все, с кем есть личная переписка</option>
+    </select>
+    <input name="tag" placeholder="Тег (необязательно), напр. clients">
+    <button {% if not authorized %}disabled{% endif %}>Импортировать</button>
+  </form>
+  <small class="muted">Самый надёжный способ: Telegram уже «знает» этих людей, отправка не требует поиска по username.</small>
+</article>
+<article>
+  <header><strong>Импорт из CSV</strong></header>
+  <form method="post" action="/contacts/import-csv" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".csv,text/csv" required>
+    <input name="tag" placeholder="Тег для всех строк (необязательно)">
+    <button>Загрузить</button>
+  </form>
+  <small class="muted">Колонки: <code>username</code>, <code>phone</code>, <code>user_id</code>, <code>first_name</code>, <code>last_name</code>, <code>tags</code>. Любые другие колонки станут переменными шаблона, например <code>{company}</code>. Разделитель , ; или Tab.</small>
+</article>
+</div>
+
+<form method="get" class="grid">
+  <input name="s" value="{{ s }}" placeholder="Поиск по имени / username / телефону">
+  <select name="tag"><option value="">Все теги</option>{% for t in tags %}<option {% if t==tag %}selected{% endif %}>{{ t }}</option>{% endfor %}</select>
+  <button class="outline">Фильтр</button>
+</form>
+<p class="muted">Найдено: {{ total }}</p>
+<table>
+<thead><tr><th>#</th><th>Имя</th><th>Username</th><th>Телефон</th><th>Теги</th><th>Переменные</th><th></th></tr></thead>
+<tbody>
+{% for c in rows %}
+<tr {% if c.opted_out %}style="opacity:.5"{% endif %}>
+  <td>{{ c.id }}</td>
+  <td>{{ c.first_name }} {{ c.last_name }}{% if c.opted_out %} <span class="badge b-skipped">отписан</span>{% endif %}</td>
+  <td>{% if c.username %}@{{ c.username }}{% endif %}</td>
+  <td>{{ c.phone or '' }}</td>
+  <td><small>{{ c.tags }}</small></td>
+  <td><small class="muted">{{ c.extra if c.extra != '{}' else '' }}</small></td>
+  <td class="row-actions"><form method="post" action="/contacts/{{ c.id }}/optout"><button class="outline secondary">{{ 'вернуть' if c.opted_out else 'исключить' }}</button></form></td>
+</tr>
+{% endfor %}
+</tbody></table>
+{% if total > p*100 %}<a href="?s={{ s }}&tag={{ tag }}&p={{ p+1 }}">Следующая страница →</a>{% endif %}
+
+<details><summary class="muted">Удаление контактов</summary>
+<form method="post" action="/contacts/delete" class="grid">
+  <select name="tag"><option value="">ВСЕ контакты</option>{% for t in tags %}<option>{{ t }}</option>{% endfor %}</select>
+  <input name="confirm" placeholder="Введите «да»">
+  <button class="secondary">Удалить</button>
+</form></details>
+{% endblock %}

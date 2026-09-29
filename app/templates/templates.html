@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<article>
+<header><strong>{{ 'Редактировать шаблон' if tpl else 'Новый шаблон' }}</strong></header>
+<form method="post" action="/templates/save">
+  <input type="hidden" name="tid" value="{{ tpl.id if tpl else 0 }}">
+  <input name="name" placeholder="Название" value="{{ tpl.name if tpl else '' }}" required>
+  <textarea name="body" rows="7" required placeholder="{Привет|Здравствуйте}, {first_name}! ...">{{ tpl.body if tpl else '' }}</textarea>
+  <small class="muted">
+    Переменные: <code>{first_name}</code> <code>{last_name}</code> <code>{name}</code> <code>{username}</code> + колонки из CSV.<br>
+    Спинтакс: <code>{Привет|Добрый день|Здравствуйте}</code> — у каждого получателя случайный вариант, тексты не будут одинаковыми.<br>
+    Форматирование: <code>**жирный**</code>, <code>__курсив__</code>, <code>[ссылка](https://...)</code>.
+  </small>
+  <button>Сохранить</button>
+  {% if tpl %}<a href="/templates">отмена</a>{% endif %}
+</form>
+</article>
+
+{% for t in rows %}
+<article>
+  <header><strong>{{ t.name }}</strong> <small class="muted">#{{ t.id }} · переменные: {{ vars[t.id]|join(', ') or 'нет' }}</small></header>
+  <div class="grid">
+    <div><small class="muted">Шаблон</small><pre class="tpl">{{ t.body }}</pre></div>
+    <div><small class="muted">Пример для первого контакта</small><pre class="tpl">{{ previews[t.id] }}</pre></div>
+  </div>
+  <footer class="row-actions">
+    <a href="/templates?edit={{ t.id }}" role="button" class="outline">Изменить</a>
+    <form method="post" action="/templates/{{ t.id }}/test"><button class="outline">Тест в «Избранное»</button></form>
+    <form method="post" action="/templates/{{ t.id }}/delete" onsubmit="return confirm('Удалить шаблон?')"><button class="outline secondary">Удалить</button></form>
+  </footer>
+</article>
+{% endfor %}
+{% endblock %}

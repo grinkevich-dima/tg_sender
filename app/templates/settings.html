@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<form method="post" action="/settings">
+<article>
+<header><strong>Прогрев аккаунта</strong> <small class="muted">· сегодня день {{ warmup_day or '—' }}, лимит {{ limit }}</small></header>
+<label><input type="checkbox" name="warmup_enabled" {% if s.warmup_enabled=='1' %}checked{% endif %}> Включить постепенное увеличение лимита</label>
+<div class="grid">
+  <label>Лимит в 1-й день<input type="number" name="warmup_start" value="{{ s.warmup_start }}" min="1"></label>
+  <label>Прибавка в день<input type="number" name="warmup_step" value="{{ s.warmup_step }}" min="0"></label>
+  <label>Потолок в день<input type="number" name="daily_max" value="{{ s.daily_max }}" min="1"></label>
+  <label>Дата начала прогрева<input type="date" name="warmup_start_date" value="{{ s.warmup_start_date }}"></label>
+</div>
+<small class="muted">Лимит = min(потолок, старт + прибавка × дни с начала). Дата ставится сама при первой отправке; очистите её, чтобы начать прогрев заново.</small>
+</article>
+<article>
+<header><strong>Темп отправки</strong></header>
+<div class="grid">
+  <label>Пауза от, сек<input type="number" name="delay_min" value="{{ s.delay_min }}" min="5"></label>
+  <label>Пауза до, сек<input type="number" name="delay_max" value="{{ s.delay_max }}" min="5"></label>
+  <label>Рабочие часы с<input type="time" name="work_start" value="{{ s.work_start }}"></label>
+  <label>по<input type="time" name="work_end" value="{{ s.work_end }}"></label>
+</div>
+</article>
+<article>
+<header><strong>Отписка</strong></header>
+<label>Стоп-слова (через запятую)<input name="stop_words" value="{{ s.stop_words }}"></label>
+<small class="muted">Если контакт ответит сообщением, которое начинается с одного из этих слов, он будет исключён из всех рассылок.</small>
+</article>
+{% if s.paused_until %}
+<article><header><strong>⚠ Пауза из-за ограничения Telegram до {{ s.paused_until[:16].replace('T',' ') }}</strong></header>
+<label><input type="checkbox" name="clear_pause"> Снять паузу вручную (не рекомендуется при PEER_FLOOD)</label></article>
+{% endif %}
+<button>Сохранить</button>
+</form>
+{% endblock %}

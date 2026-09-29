@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}TG Sender{% endblock %}</title>
+<link rel="stylesheet" href="/static/pico.min.css">
+<style>
+  :root { --pico-font-size: 15px; }
+  nav.top { border-bottom: 1px solid var(--pico-muted-border-color); margin-bottom: 1rem; }
+  .grid-stats { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap: .75rem; margin-bottom:1rem; }
+  .stat { padding: .8rem 1rem; border:1px solid var(--pico-muted-border-color); border-radius: 8px; }
+  .stat b { display:block; font-size: 1.6rem; }
+  .stat small { color: var(--pico-muted-color); }
+  .badge { padding: 2px 8px; border-radius: 10px; font-size: .8em; white-space: nowrap; background: var(--pico-muted-border-color); }
+  .b-sent{background:#dbeafe;color:#1e3a8a} .b-read{background:#dcfce7;color:#14532d} .b-replied{background:#bbf7d0;color:#14532d;font-weight:600}
+  .b-failed{background:#fee2e2;color:#7f1d1d} .b-queued{background:#f1f5f9;color:#334155} .b-skipped{background:#fef3c7;color:#78350f}
+  .b-running{background:#dcfce7;color:#14532d} .b-paused{background:#fef3c7;color:#78350f} .b-done{background:#e0e7ff;color:#312e81}
+  .flash { padding:.6rem 1rem; border-radius:6px; margin-bottom:1rem; }
+  .flash.ok{background:#dcfce7;color:#14532d} .flash.err{background:#fee2e2;color:#7f1d1d}
+  .muted { color: var(--pico-muted-color); }
+  .cnt { color: var(--pico-muted-color); font-size: .8em; }
+  .fbar { display:flex; flex-wrap:wrap; gap:.4rem; align-items:flex-start; margin:.5rem 0; }
+  .fbar details.dropdown { margin:0; min-width: 150px; }
+  .fbar details.dropdown summary { padding:.35rem .7rem; font-size:.85em; height:auto; }
+  .fbar details.dropdown ul { max-height: 320px; overflow:auto; min-width: 340px; font-size:.9em; }
+  .fbar details.dropdown ul label { white-space: normal; }
+  .fbar .fsearch { width:auto; flex:1 1 180px; margin:0; padding:.35rem .7rem; font-size:.85em; height:auto; }
+  details.filters > summary { margin-bottom:.3rem; }
+  .b-new{background:#f1f5f9;color:#334155} .b-draft{background:#f1f5f9;color:#334155}
+  table { font-size: .9em; }
+  .row-actions form { display:inline; }
+  .row-actions button, .row-actions a[role=button] { padding: .3rem .8rem; font-size: .85em; margin:0 .3rem .3rem 0; width:auto; }
+  pre.tpl { white-space: pre-wrap; font-size:.85em; padding:.6rem; }
+  .log-error{color:#b91c1c} .log-warn{color:#b45309}
+  .progress-wrap { display:flex; gap:.5rem; align-items:center; }
+</style>
+</head>
+<body>
+<nav class="container top">
+  <ul><li><strong>📨 TG Sender</strong></li></ul>
+  <ul>
+    <li><a href="/">Дашборд</a></li>
+    <li><a href="/contacts">Контакты</a></li>
+    <li><a href="/templates">Шаблоны</a></li>
+    <li><a href="/campaigns">Кампании</a></li>
+    <li><a href="/lists">Списки xlsx</a></li>
+    <li><a href="/settings">Прогрев и лимиты</a></li>
+    <li><a href="/log">Журнал</a></li>
+    <li><a href="/auth">{% if authorized %}👤 {{ me }}{% else %}🔑 Войти{% endif %}</a></li>
+  </ul>
+</nav>
+<main class="container">
+  {% if flash and flash.msg %}<div class="flash ok">{{ flash.msg }}</div>{% endif %}
+  {% if flash and flash.err %}<div class="flash err">{{ flash.err }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

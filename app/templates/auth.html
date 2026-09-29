@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<article style="max-width:520px;margin:auto">
+<header><strong>Авторизация личного аккаунта Telegram</strong></header>
+{% if not configured %}
+  <p>Сначала укажите <code>TG_API_ID</code> и <code>TG_API_HASH</code> в файле <code>.env</code> (получить на <a href="https://my.telegram.org/apps" target="_blank">my.telegram.org/apps</a>) и перезапустите панель.</p>
+{% elif step == 'done' %}
+  <p>✅ Подключён: <b>{{ me }}</b></p>
+  <p class="muted">Сессия хранится в <code>data/account.session</code>. Не передавайте этот файл никому — это полный доступ к аккаунту.</p>
+  <form method="post" action="/auth/logout" onsubmit="return confirm('Завершить сессию?')"><button class="secondary">Выйти из аккаунта</button></form>
+{% elif step == 'code' %}
+  <form method="post" action="/auth/code">
+    <label>Код из Telegram (отправлен на {{ phone }})<input name="code" autocomplete="one-time-code" required autofocus></label>
+    <button>Войти</button>
+  </form>
+  <a href="/auth">← другой номер</a> · <a href="/auth/qr">войти по QR-коду</a>
+{% elif step == 'password' %}
+  <form method="post" action="/auth/password">
+    <label>Облачный пароль (2FA)<input type="password" name="password" required autofocus></label>
+    <button>Подтвердить</button>
+  </form>
+{% else %}
+  <form method="post" action="/auth/phone">
+    <label>Номер телефона<input name="phone" placeholder="+375 29 123 45 67" required autofocus></label>
+    <button>Получить код</button>
+  </form>
+  <p style="text-align:center">или</p>
+  <a href="/auth/qr" role="button" class="secondary" style="width:100%">📷 Войти по QR-коду (без кода из SMS)</a>
+{% endif %}
+</article>
+{% endblock %}

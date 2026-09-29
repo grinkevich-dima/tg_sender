@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<article>
+<header><strong>Новая кампания</strong></header>
+<form method="post" action="/campaigns/create">
+  <div class="grid">
+    <input name="name" placeholder="Название, напр. «Осенняя акция»" required>
+    <select name="template_id" required><option value="">— шаблон —</option>{% for t in tpls %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}</select>
+    <select name="tag"><option value="">Все контакты</option>{% for t in tags %}<option value="{{ t }}">Тег: {{ t }}</option>{% endfor %}</select>
+  </div>
+  <label><input type="checkbox" name="skip_contacted" checked> Не отправлять тем, кто уже получил этот шаблон</label>
+  <label><input type="checkbox" name="start" checked> Запустить сразу</label>
+  <small class="muted">Отписавшиеся исключаются автоматически. Отправка идёт в рамках дневного лимита и рабочих часов.</small>
+  <button>Создать</button>
+</form>
+</article>
+<table>
+<thead><tr><th>#</th><th>Кампания</th><th>Шаблон</th><th>Получателей</th><th>Статус</th><th>Создана</th></tr></thead>
+{% for c in camps %}
+<tr><td>{{ c.id }}</td><td><a href="/campaigns/{{ c.id }}">{{ c.name }}</a></td><td>{{ c.tpl }}</td><td>{{ c.total }}</td>
+<td><span class="badge b-{{ c.status }}">{{ STATUS_RU[c.status] }}</span></td><td><small>{{ c.created_at[:10] }}</small></td></tr>
+{% endfor %}
+</table>
+{% endblock %}

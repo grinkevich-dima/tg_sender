@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+{% if not configured %}<div class="flash err">Не заданы TG_API_ID и TG_API_HASH в файле .env — см. README.</div>
+{% elif not authorized %}<div class="flash err">Аккаунт не авторизован. <a href="/auth">Войти →</a></div>{% endif %}
+
+<div class="grid-stats">
+  <div class="stat"><small>Отправлено сегодня</small><b>{{ sent_today }} / {{ limit }}</b></div>
+  <div class="stat"><small>День прогрева</small><b>{{ warmup_day or '—' }}</b></div>
+  <div class="stat"><small>Контактов в базе</small><b>{{ contacts_n }}</b></div>
+  <div class="stat"><small>Статус отправки</small><b style="font-size:1rem">{{ wstate.status }}</b>
+    {% if wstate.next_send_at %}<small>след. ≈ {{ wstate.next_send_at.strftime('%H:%M:%S') }}</small>{% endif %}</div>
+</div>
+
+<h4>Кампании <a href="/campaigns" style="font-size:.7em">+ новая</a></h4>
+<table>
+<thead><tr><th>Кампания</th><th>Статус</th><th>Всего</th><th>Доставлено</th><th>Прочитано</th><th>Ответили</th><th>Ошибки</th><th>В очереди</th></tr></thead>
+<tbody>
+{% for c in camps %}
+<tr>
+  <td><a href="/campaigns/{{ c.id }}">{{ c.name }}</a><br><small class="muted">{{ c.tpl }}</small></td>
+  <td><span class="badge b-{{ c.status }}">{{ STATUS_RU[c.status] }}</span></td>
+  <td>{{ c.total }}</td><td>{{ c.s or 0 }}</td><td>{{ c.r or 0 }}</td><td>{{ c.rep or 0 }}</td><td>{{ c.f or 0 }}</td><td>{{ c.q or 0 }}</td>
+</tr>
+{% else %}<tr><td colspan="8" class="muted">Пока нет кампаний</td></tr>{% endfor %}
+</tbody></table>
+<form method="post" action="/reads/refresh"><button class="outline secondary" style="width:auto">↻ Обновить статусы прочтения</button></form>
+
+<h4>Последние события <a href="/log" style="font-size:.7em">весь журнал</a></h4>
+<table>{% for l in log %}<tr class="log-{{ l.level }}"><td style="white-space:nowrap"><small>{{ l.ts[5:16].replace('T',' ') }}</small></td><td>{{ l.text }}</td></tr>{% endfor %}</table>
+<script>setTimeout(()=>location.reload(), 30000)</script>
+{% endblock %}

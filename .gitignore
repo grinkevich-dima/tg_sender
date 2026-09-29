@@ -1,0 +1,15 @@
+# секреты и данные аккаунта — НЕ коммитить
+.env
+data/
+*.session
+*.session-journal
+*.db
+*.db-*
+
+start.log
+*.zip
+*.xlsx
+.DS_Store
+.venv/
+__pycache__/
+.pytest_cache/

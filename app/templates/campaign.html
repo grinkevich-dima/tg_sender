@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<h3>{{ c.name }} <span class="badge b-{{ c.status }}">{{ STATUS_RU[c.status] }}</span></h3>
+<p class="muted">Шаблон: {{ c.tpl }}{% if stats.get('queued') %} · осталось ≈ {{ eta_days }} дн. при текущем лимите{% endif %}</p>
+
+<div class="grid-stats">
+  <div class="stat"><small>Всего</small><b>{{ total }}</b></div>
+  <div class="stat"><small>Доставлено</small><b>{{ delivered }}</b>{% if total %}<small>{{ (delivered*100/total)|round|int }}%</small>{% endif %}</div>
+  <div class="stat"><small>Прочитано</small><b>{{ stats.get('read',0) + stats.get('replied',0) }}</b></div>
+  <div class="stat"><small>Ответили</small><b>{{ stats.get('replied',0) }}</b></div>
+  <div class="stat"><small>Ошибки</small><b>{{ stats.get('failed',0) }}</b></div>
+  <div class="stat"><small>В очереди</small><b>{{ stats.get('queued',0) }}</b></div>
+</div>
+{% if total %}<progress value="{{ total - stats.get('queued',0) }}" max="{{ total }}"></progress>{% endif %}
+
+<div class="row-actions" style="margin-bottom:1rem">
+  {% if c.status in ('draft','paused') %}<form method="post" action="/campaigns/{{ c.id }}/start"><button>▶ Запустить</button></form>{% endif %}
+  {% if c.status == 'running' %}<form method="post" action="/campaigns/{{ c.id }}/pause"><button class="secondary">⏸ Пауза</button></form>{% endif %}
+  {% if stats.get('failed') %}<form method="post" action="/campaigns/{{ c.id }}/retry"><button class="outline">↻ Повторить ошибки</button></form>{% endif %}
+  <a role="button" class="outline" href="/campaigns/{{ c.id }}/export.csv">⬇ Отчёт CSV</a>
+  <form method="post" action="/campaigns/{{ c.id }}/delete" onsubmit="return confirm('Удалить кампанию и её отчёт?')"><button class="outline secondary">Удалить</button></form>
+</div>
+
+<nav><ul>
+  <li><a href="?">все</a></li>
+  {% for st in ['queued','sent','read','replied','failed','skipped'] %}<li><a href="?status={{ st }}" {% if fstatus==st %}aria-current="page"{% endif %}>{{ STATUS_RU[st] }} ({{ stats.get(st,0) }})</a></li>{% endfor %}
+</ul></nav>
+<table>
+<thead><tr><th>Получатель</th><th>Статус</th><th>Отправлено</th><th>Текст / ошибка</th></tr></thead>
+{% for m in rows %}
+<tr>
+  <td>{{ m.first_name }} {{ m.last_name }}<br><small class="muted">{% if m.username %}@{{ m.username }}{% else %}{{ m.phone or '' }}{% endif %}</small></td>
+  <td><span class="badge b-{{ m.status }}">{{ STATUS_RU[m.status] }}</span></td>
+  <td><small>{{ (m.sent_at or '')[:16].replace('T',' ') }}</small></td>
+  <td><small>{% if m.error %}<span class="log-error">{{ m.error }}</span>{% else %}{{ (m.text or '')[:120] }}{% endif %}</small></td>
+</tr>
+{% endfor %}
+</table>
+<small class="muted">Показано до 500 строк. Полный отчёт — в CSV. Время отправки в UTC.</small>
+{% endblock %}
