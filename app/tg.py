@@ -228,9 +228,20 @@ class TgManager:
 
     prepare_state: dict = {}
 
+    @property
+    def preparing(self) -> bool:
+        return any(st.get("running") for st in self.prepare_state.values())
+
     async def prepare_list(self, list_id: int):
         """Прогревает кэш сессии: все диалоги + участники чатов из списка, чтобы найти людей по ID."""
-        st = self.prepare_state[list_id] = {"running": True, "step": "диалоги", "found": 0, "total": 0}
+        st = self.prepare_state[list_id] = {"running": True, "step": "ожидание отправки", "found": 0, "total": 0}
+        # Держим tg.lock всё время поиска: иначе повышенный flood_sleep_threshold действует и на отправку —
+        # Telethon молча ждал бы FloodWait до 5 мин вместо нашей паузы. Воркер на это время не отправляет.
+        async with self.lock:
+            await self._prepare_list(list_id, st)
+
+    async def _prepare_list(self, list_id: int, st: dict):
+        st["step"] = "диалоги"
         # Загрузка всех диалогов — много запросов подряд, Telegram отвечает FloodWait на десятки секунд.
         # На время поиска разрешаем Telethon самому выжидать такие паузы (до 5 мин), потом возвращаем 0.
         old_threshold = self.client.flood_sleep_threshold

@@ -131,8 +131,13 @@ async def auth_page(request: Request):
     return page(request, "auth.html", step=step, configured=tg.configured, phone=tg.phone)
 
 
+NOT_CONFIGURED = "Не заданы TG_API_ID / TG_API_HASH в .env — впишите их и перезапустите панель"
+
+
 @app.post("/auth/phone")
 async def auth_phone(phone: str = Form(...)):
+    if not tg.configured:
+        return back("/auth", err=NOT_CONFIGURED)
     try:
         where = await tg.send_code(re.sub(r"[^\d+]", "", phone))
     except errors.SendCodeUnavailableError:
@@ -156,6 +161,8 @@ def _qr_svg(url: str) -> str:
 async def auth_qr(request: Request):
     if tg.me:
         return back("/", msg="Аккаунт уже авторизован")
+    if not tg.configured:
+        return back("/auth", err=NOT_CONFIGURED)
     try:
         url = await tg.qr_start()
     except errors.RPCError as e:
@@ -183,6 +190,8 @@ async def auth_qr_done():
 
 @app.post("/auth/code")
 async def auth_code(code: str = Form(...)):
+    if not (tg.configured and tg.phone_code_hash):
+        return back("/auth", err=NOT_CONFIGURED if not tg.configured else "Сначала запросите код")
     try:
         r = await tg.sign_in_code(code)
     except errors.RPCError as e:
@@ -195,6 +204,8 @@ async def auth_code(code: str = Form(...)):
 
 @app.post("/auth/password")
 async def auth_password(password: str = Form(...)):
+    if not tg.configured:
+        return back("/auth", err=NOT_CONFIGURED)
     try:
         await tg.sign_in_password(password)
     except errors.RPCError as e:
@@ -251,6 +262,14 @@ async def contacts_import_csv(file: UploadFile = File(...), tag: str = Form(""))
         dialect = csv.excel
     reader = csv.DictReader(io.StringIO(raw), dialect=dialect)
     added = updated = bad = 0
+    with db.tx():
+        added, updated, bad = _import_csv_rows(reader, tag)
+    db.log(f"Импорт CSV {file.filename}: +{added}, обновлено {updated}, пропущено {bad}")
+    return back("/contacts", msg=f"Добавлено {added}, обновлено {updated}, пропущено строк {bad}")
+
+
+def _import_csv_rows(reader, tag: str) -> tuple[int, int, int]:
+    added = updated = bad = 0
     for row in reader:
         row = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
         uname = row.pop("username", "") or row.pop("telegram", "")
@@ -285,8 +304,7 @@ async def contacts_import_csv(file: UploadFile = File(...), tag: str = Form(""))
             db.ex("""INSERT INTO contacts(tg_user_id, username, phone, first_name, last_name, extra, tags, created_at)
                      VALUES (?,?,?,?,?,?,?,?)""", (uid, uname, phone, first, last, extra, tags, db.now_utc()))
             added += 1
-    db.log(f"Импорт CSV {file.filename}: +{added}, обновлено {updated}, пропущено {bad}")
-    return back("/contacts", msg=f"Добавлено {added}, обновлено {updated}, пропущено строк {bad}")
+    return added, updated, bad
 
 
 @app.post("/contacts/{cid}/optout")
@@ -345,6 +363,8 @@ async def templates_test(tid: int):
     t = db.one("SELECT * FROM templates WHERE id=?", (tid,))
     if not t:
         return back("/templates", err="Шаблон не найден")
+    if tg.preparing:
+        return back("/templates", err="Идёт поиск получателей — попробуйте позже")
     sample = db.one("SELECT * FROM contacts ORDER BY id LIMIT 1")
     text = render(t["body"], db.contact_vars(sample) if sample else {"first_name": "Иван", "name": "Иван Петров"})
     try:
@@ -382,8 +402,9 @@ async def campaigns_create(name: str = Form(...), template_id: int = Form(...), 
     status = "running" if start else "draft"
     cid = db.ex("INSERT INTO campaigns(name, template_id, status, created_at, started_at) VALUES (?,?,?,?,?)",
                 (name, template_id, status, db.now_utc(), db.now_utc() if start else None))
-    for i in ids:
-        db.ex("INSERT OR IGNORE INTO messages(campaign_id, contact_id) VALUES (?,?)", (cid, i))
+    with db.tx():
+        for i in ids:
+            db.ex("INSERT OR IGNORE INTO messages(campaign_id, contact_id) VALUES (?,?)", (cid, i))
     db.log(f"Создана кампания «{name}»: {len(ids)} получателей")
     worker.wake.set()
     return back(f"/campaigns/{cid}", msg=f"Кампания создана: {len(ids)} получателей")
@@ -396,7 +417,7 @@ async def campaign_view(request: Request, cid: int, status: str = ""):
         return back("/campaigns", err="Не найдена")
     stats = {r["status"]: r["n"] for r in db.q("SELECT status, COUNT(*) n FROM messages WHERE campaign_id=? GROUP BY status", (cid,))}
     sql = """SELECT m.*, ct.first_name, ct.last_name, ct.username, ct.phone FROM messages m
-             JOIN contacts ct ON ct.id=m.contact_id WHERE m.campaign_id=?"""
+             LEFT JOIN contacts ct ON ct.id=m.contact_id WHERE m.campaign_id=?"""
     params = [cid]
     if status:
         sql += " AND m.status=?"; params.append(status)
@@ -412,6 +433,8 @@ async def campaign_view(request: Request, cid: int, status: str = ""):
 @app.post("/campaigns/{cid}/{action}")
 async def campaign_action(cid: int, action: str):
     if action == "start":
+        if not db.one("SELECT 1 FROM messages WHERE campaign_id=? AND status='queued'", (cid,)):
+            return back(f"/campaigns/{cid}", err="В очереди нет сообщений — запускать нечего")
         db.ex("UPDATE campaigns SET status='running', started_at=COALESCE(started_at, ?) WHERE id=?", (db.now_utc(), cid))
     elif action == "pause":
         db.ex("UPDATE campaigns SET status='paused' WHERE id=?", (cid,))
@@ -432,7 +455,7 @@ async def campaign_action(cid: int, action: str):
 @app.get("/campaigns/{cid}/export.csv")
 async def campaign_export(cid: int):
     rows = db.q("""SELECT ct.first_name, ct.last_name, ct.username, ct.phone, ct.tg_user_id, m.status, m.error,
-                   m.sent_at, m.read_at, m.replied_at, m.text FROM messages m JOIN contacts ct ON ct.id=m.contact_id
+                   m.sent_at, m.read_at, m.replied_at, m.text FROM messages m LEFT JOIN contacts ct ON ct.id=m.contact_id
                    WHERE m.campaign_id=? ORDER BY m.id""", (cid,))
     buf = io.StringIO()
     buf.write("﻿")  # для Excel
@@ -516,6 +539,7 @@ templates.env.globals["KIND_RU"] = outreach.KIND_RU
 
 
 def _read_filter(list_id: int, qp) -> dict:
+    """Фильтр из адресной строки (GET) или формы (POST); без «f» — фильтр по умолчанию."""
     if "f" not in qp:
         return outreach.default_filter(list_id)
     return {"kind": qp.getlist("kind"), "dialog": qp.getlist("dialog"), "address": qp.getlist("address"),
@@ -572,11 +596,7 @@ async def list_view(request: Request, lid: int, show: str = ""):
 @app.post("/lists/{lid}/enqueue")
 async def list_enqueue(request: Request, lid: int):
     form = await request.form()
-    f = {"kind": form.getlist("kind"), "dialog": form.getlist("dialog"), "address": form.getlist("address"),
-         "src": form.getlist("src"), "state": form.getlist("state"), "real": form.getlist("real"),
-         "q": (form.get("q") or "").strip(), "mismatch": bool(form.get("mismatch")), "use_real": bool(form.get("use_real")),
-         "has_text": bool(form.get("has_text")), "has_target": bool(form.get("has_target"))}
-    n = outreach.enqueue(lid, f)
+    n = outreach.enqueue(lid, _read_filter(lid, form))
     if form.get("start"):
         db.ex("UPDATE lists SET status='running' WHERE id=?", (lid,))
         worker.wake.set()
@@ -592,6 +612,8 @@ async def list_prepare_status(lid: int):
 @app.post("/lists/{lid}/{action}")
 async def list_action(lid: int, action: str):
     if action == "start":
+        if not db.one("SELECT 1 FROM list_items WHERE list_id=? AND state='queued'", (lid,)):
+            return back(f"/lists/{lid}", err="Очередь пуста — сначала добавьте строки кнопкой «В очередь»")
         db.ex("UPDATE lists SET status='running' WHERE id=?", (lid,))
         worker.wake.set()
     elif action == "pause":
@@ -622,6 +644,8 @@ async def list_item_send_now(iid: int, request: Request):
         return back("/lists", err="Строка не найдена")
     if not tg.me:
         return back(ref, err="Аккаунт не авторизован")
+    if tg.preparing:
+        return back(ref, err="Идёт поиск получателей — отправьте, когда он закончится")
     pu = worker.paused_until()
     if pu:
         return back(ref, err=f"Отправка на паузе до {pu:%d.%m %H:%M} из-за ограничения Telegram")

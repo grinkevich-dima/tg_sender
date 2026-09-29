@@ -29,7 +29,7 @@
 <thead><tr><th>Получатель</th><th>Статус</th><th>Отправлено</th><th>Текст / ошибка</th></tr></thead>
 {% for m in rows %}
 <tr>
-  <td>{{ m.first_name }} {{ m.last_name }}<br><small class="muted">{% if m.username %}@{{ m.username }}{% else %}{{ m.phone or '' }}{% endif %}</small></td>
+  <td>{% if m.first_name is none and m.username is none and m.phone is none %}<span class="muted">(контакт удалён)</span>{% else %}{{ m.first_name }} {{ m.last_name }}{% endif %}<br><small class="muted">{% if m.username %}@{{ m.username }}{% else %}{{ m.phone or '' }}{% endif %}</small></td>
   <td><span class="badge b-{{ m.status }}">{{ STATUS_RU[m.status] }}</span></td>
   <td><small>{{ (m.sent_at or '')[:16].replace('T',' ') }}</small></td>
   <td><small>{% if m.error %}<span class="log-error">{{ m.error }}</span>{% else %}{{ (m.text or '')[:120] }}{% endif %}</small></td>

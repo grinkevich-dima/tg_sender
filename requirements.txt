@@ -1,7 +1,9 @@
-telethon>=1.36
-fastapi>=0.110
-uvicorn[standard]>=0.29
-jinja2>=3.1
-python-multipart>=0.0.9
-python-dotenv>=1.0
-qrcode>=7.4
+# Версии закреплены: tg.py использует внутренности Telethon 1.x (_phone_code_hash)
+telethon==1.45.0
+fastapi==0.141.1
+starlette==1.7.0
+uvicorn[standard]==0.54.0
+jinja2==3.1.6
+python-multipart==0.0.32
+python-dotenv==1.2.3
+qrcode==8.2

@@ -120,11 +120,27 @@ def import_file(data: bytes, filename: str) -> tuple[int, int, list[str]]:
     sheet, hi, cmap = target
     texts = _texts_from_sheets(sheets)
 
+    with db.tx():
+        list_id, n, warn_topic = _insert_rows(sheets[sheet][hi + 1:], cmap, texts, filename)
+    if warn_topic:
+        warnings.append("«Ссылка на тему» ведёт в другой чат, тема не применена: " + ", ".join(warn_topic[:5]))
+    no_target = db.one("SELECT COUNT(*) n FROM list_items WHERE list_id=? AND peer_id IS NULL AND username IS NULL",
+                       (list_id,))["n"]
+    if no_target:
+        warnings.append(f"{no_target} строк без распознанной ссылки — их отправить не получится")
+    no_text = db.one("SELECT COUNT(*) n FROM list_items WHERE list_id=? AND (text IS NULL OR text='')", (list_id,))["n"]
+    if no_text:
+        warnings.append(f"{no_text} строк без текста")
+    db.log(f"Импорт списка «{filename}»: {n} строк (лист «{sheet}»)")
+    return list_id, n, warnings
+
+
+def _insert_rows(rows: list, cmap: dict, texts: dict, filename: str) -> tuple[int, int, list]:
     list_id = db.ex("INSERT INTO lists(name, filename, created_at) VALUES (?,?,?)",
                     (re.sub(r"\.xlsx$", "", filename or "список", flags=re.I), filename, db.now_utc()))
     n = 0
     warn_topic = []
-    for row in sheets[sheet][hi + 1:]:
+    for row in rows:
         rec = {f: row[i] for i, f in cmap.items() if i < len(row)}
         rec = {k: (str(v).strip() if v is not None else None) for k, v in rec.items()}
         if not any(rec.get(k) for k in ("link", "title", "first_name", "text")):
@@ -154,17 +170,7 @@ def import_file(data: bytes, filename: str) -> tuple[int, int, list[str]]:
                rec.get("dialog"), rec.get("address"), rec.get("plan"), rec.get("note"), rec.get("text_no"), text,
                rec.get("src_status"), status_group(rec.get("src_status"))))
         n += 1
-    if warn_topic:
-        warnings.append("«Ссылка на тему» ведёт в другой чат, тема не применена: " + ", ".join(warn_topic[:5]))
-    no_target = db.one("SELECT COUNT(*) n FROM list_items WHERE list_id=? AND peer_id IS NULL AND username IS NULL",
-                       (list_id,))["n"]
-    if no_target:
-        warnings.append(f"{no_target} строк без распознанной ссылки — их отправить не получится")
-    no_text = db.one("SELECT COUNT(*) n FROM list_items WHERE list_id=? AND (text IS NULL OR text='')", (list_id,))["n"]
-    if no_text:
-        warnings.append(f"{no_text} строк без текста")
-    db.log(f"Импорт списка «{filename}»: {n} строк (лист «{sheet}»)")
-    return list_id, n, warnings
+    return list_id, n, warn_topic
 
 
 # ---------- фильтры ----------
@@ -232,6 +238,7 @@ def enqueue(list_id: int, f: dict) -> int:
             if g:
                 ordered.append(g.pop(0))
     start = (db.one("SELECT MAX(order_idx) m FROM list_items WHERE list_id=?", (list_id,))["m"] or 0) + 1
-    for i, item_id in enumerate(ordered):
-        db.ex("UPDATE list_items SET state='queued', error=NULL, order_idx=? WHERE id=?", (start + i, item_id))
+    with db.tx():
+        for i, item_id in enumerate(ordered):
+            db.ex("UPDATE list_items SET state='queued', error=NULL, order_idx=? WHERE id=?", (start + i, item_id))
     return len(ordered)

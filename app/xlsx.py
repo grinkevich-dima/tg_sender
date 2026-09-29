@@ -45,7 +45,10 @@ def read_xlsx(data: bytes) -> dict[str, list[list]]:
         rows = []
         for row in root.findall("m:sheetData/m:row", NS):
             vals = {}
+            col = -1
             for c in row.findall("m:c", NS):
+                # атрибут r («B7») по стандарту необязателен — без него ячейка идёт следующей по порядку
+                col = _col_index(c.get("r")) if c.get("r") else col + 1
                 t = c.get("t")
                 v = c.find("m:v", NS)
                 if t == "s" and v is not None:
@@ -63,8 +66,8 @@ def read_xlsx(data: bytes) -> dict[str, list[list]]:
                             pass
                 else:
                     val = None
-                vals[_col_index(c.get("r"))] = val
-            rnum = int(row.get("r")) - 1
+                vals[col] = val
+            rnum = int(row.get("r")) - 1 if row.get("r") else len(rows)
             while len(rows) < rnum:
                 rows.append([])
             width = max(vals) + 1 if vals else 0

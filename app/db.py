@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from .config import DB_PATH, DEFAULT_SETTINGS, TZ
@@ -148,6 +149,19 @@ def ex(sql: str, params=()) -> int:
 def changed(sql: str, params=()) -> int:
     """UPDATE/DELETE → сколько строк затронуто."""
     return conn().execute(sql, params).rowcount
+
+
+@contextmanager
+def tx():
+    """Одна транзакция на пачку записей: импорт тысяч строк без fsync на каждую."""
+    c = conn()
+    c.execute("BEGIN")
+    try:
+        yield
+    except BaseException:
+        c.execute("ROLLBACK")
+        raise
+    c.execute("COMMIT")
 
 
 def now_utc() -> str:

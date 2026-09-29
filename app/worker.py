@@ -128,6 +128,10 @@ async def tick() -> float:
         state["status"] = "аккаунт не авторизован"
         return 15
 
+    if tg.preparing:
+        state["status"] = "идёт поиск получателей — отправка подождёт"
+        return 15
+
     pu = paused_until()
     if pu:
         state["status"] = f"пауза до {pu:%d.%m %H:%M} (ограничение Telegram)"

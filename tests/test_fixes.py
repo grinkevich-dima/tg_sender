@@ -139,3 +139,70 @@ def test_good_settings_saved():
     panel.post("/settings", data={"work_start": "9:05", "warmup_enabled": "1"}, follow_redirects=False)
     assert db.get_setting("work_start") == "09:05"
     db.set_setting("work_start", old)
+
+
+# ---- поиск получателей не мешает отправке ----
+def test_worker_waits_while_preparing():
+    tg.client, tg.me = Fake(), ME
+    tg.prepare_state[-1] = {"running": True}
+    try:
+        assert asyncio.run(worker.tick()) == 15
+        assert "поиск" in worker.state["status"]
+        it = _item()
+        r = panel.post(f"/lists/item/{it['id']}/send", follow_redirects=False)
+        assert r.status_code == 303 and _state(it["id"])["state"] == "new"
+    finally:
+        del tg.prepare_state[-1]
+
+
+# ---- панель без TG_API_ID/HASH не падает ----
+def test_auth_without_config(monkeypatch):
+    monkeypatch.setattr(type(tg), "configured", property(lambda self: False))
+    for url, data in [("/auth/phone", {"phone": "+1"}), ("/auth/code", {"code": "1"}), ("/auth/password", {"password": "x"})]:
+        r = panel.post(url, data=data, follow_redirects=False)
+        assert r.status_code == 303, url
+
+
+# ---- запуск с пустой очередью не завершает список ----
+def test_start_empty_list_keeps_status():
+    lid = db.ex("INSERT INTO lists(name) VALUES ('empty')")
+    panel.post(f"/lists/{lid}/start", follow_redirects=False)
+    assert db.one("SELECT status FROM lists WHERE id=?", (lid,))["status"] == "draft"
+
+
+# ---- отчёт кампании не теряет удалённые контакты ----
+def test_campaign_report_keeps_deleted_contacts():
+    tid = db.ex("INSERT INTO templates(name, body) VALUES ('t', 'x')")
+    cid = db.ex("INSERT INTO campaigns(name, template_id, status) VALUES ('del', ?, 'done')", (tid,))
+    ct = db.ex("INSERT INTO contacts(username) VALUES ('gone')")
+    db.ex("INSERT INTO messages(campaign_id, contact_id, status) VALUES (?,?,'sent')", (cid, ct))
+    db.ex("DELETE FROM contacts WHERE id=?", (ct,))
+    r = panel.get(f"/campaigns/{cid}")
+    assert "контакт удалён" in r.text
+    assert panel.get(f"/campaigns/{cid}/export.csv").text.count("\n") == 2
+
+
+# ---- транзакция откатывает пачку целиком ----
+def test_tx_rollback():
+    with pytest.raises(RuntimeError):
+        with db.tx():
+            db.ex("INSERT INTO contacts(username) VALUES ('tx_probe')")
+            raise RuntimeError
+    assert not db.one("SELECT 1 FROM contacts WHERE username='tx_probe'")
+
+
+# ---- xlsx без атрибутов r у ячеек и строк ----
+def test_xlsx_without_cell_refs():
+    import io, zipfile
+    from app.xlsx import read_xlsx
+    ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("xl/workbook.xml", f'<workbook {ns} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                   '<sheets><sheet name="S" r:id="rId1"/></sheets></workbook>')
+        z.writestr("xl/_rels/workbook.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                   '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>')
+        z.writestr("xl/worksheets/sheet1.xml", f'<worksheet {ns}><sheetData>'
+                   '<row><c t="inlineStr"><is><t>Тип</t></is></c><c t="inlineStr"><is><t>Ссылка</t></is></c></row>'
+                   '<row><c t="inlineStr"><is><t>Чат</t></is></c><c><v>5</v></c></row></sheetData></worksheet>')
+    assert read_xlsx(buf.getvalue()) == {"S": [["Тип", "Ссылка"], ["Чат", 5]]}
