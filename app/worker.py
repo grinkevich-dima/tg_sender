@@ -1,16 +1,20 @@
-"""Фоновый воркер: отправка очереди с прогревом, лимитами и паузами."""
+"""Фоновая отправка: у каждого аккаунта своя очередь, прогрев, лимиты, рабочие часы и паузы.
+
+Лиды закреплены за аккаунтами, поэтому ограничение одного аккаунта (FloodWait, PEER_FLOOD)
+останавливает только его очередь — чужие аккаунты его лидов не подхватывают.
+"""
 import asyncio
 import random
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 
 from telethon import errors
 
-from . import db
-from .templating import render
-from .tg import tg
+from . import campaigns, db
+from .tg import AccountClient, tgm
 
-wake = asyncio.Event()          # будим воркер при старте кампании / смене настроек
-state = {"status": "запуск", "next_send_at": None}
+state: dict[int, dict] = {}                 # account_id → {"status", "next_send_at"}
+_wake: dict[int, asyncio.Event] = {}
+_tasks: dict[int, asyncio.Task] = {}
 
 # Ошибки, после которых конкретному получателю писать нельзя (помечаем failed и идём дальше)
 RECIPIENT_ERRORS = (
@@ -23,227 +27,175 @@ RECIPIENT_ERRORS = (
     errors.PeerIdInvalidError,
     errors.ChatWriteForbiddenError,
     errors.YouBlockedUserError,
+    errors.ChannelPrivateError,
+    errors.ChatAdminRequiredError,
+    errors.ChatRestrictedError,
+    errors.SlowModeWaitError,
+    errors.ChatSendPlainForbiddenError,
 )
-
 # Сетевые сбои: сообщение возвращаем в очередь и пробуем позже, а не помечаем ошибкой
 TRANSIENT_ERRORS = (ConnectionError, OSError, asyncio.TimeoutError)
 INTERRUPTED = "прервано во время отправки — проверьте в Telegram, дошло ли сообщение"
 
 
+def wake(account_id: int | None = None) -> None:
+    """Будим отправку аккаунта (или всех) после запуска кампании, смены настроек, входа."""
+    for aid, ev in list(_wake.items()):
+        if account_id is None or aid == account_id:
+            ev.set()
+
+
 # ---------- лимиты ----------
-def daily_limit(today: date | None = None) -> int:
-    s = db.all_settings()
-    cap = int(s["daily_max"])
-    if s["warmup_enabled"] != "1":
-        return cap
-    start = s["warmup_start_date"]
-    today = today or db.now_local().date()
-    day_n = (today - date.fromisoformat(start)).days if start else 0
-    return min(cap, int(s["warmup_start"]) + int(s["warmup_step"]) * max(day_n, 0))
+def account(account_id: int) -> dict | None:
+    return db.one("SELECT * FROM tg_accounts WHERE id=%s", (account_id,))
 
 
-def sent_today() -> int:
-    """Общий счётчик за день: кампании по шаблонам + списки из xlsx."""
-    d = db.today()
-    a = db.one("SELECT COUNT(*) AS n FROM messages WHERE sent_day=? AND status IN ('sent','read','replied')", (d,))["n"]
-    b = db.one("SELECT COUNT(*) AS n FROM list_items WHERE sent_day=? AND state IN ('sent','read','replied')", (d,))["n"]
-    return a + b
+def daily_limit(acc: dict, today: date | None = None) -> int:
+    if not acc["warmup_enabled"]:
+        return acc["daily_max"]
+    today = today or db.today()
+    start = acc["warmup_start_date"]
+    day_n = (today - start).days if start else 0
+    return min(acc["daily_max"], acc["warmup_start"] + acc["warmup_step"] * max(day_n, 0))
 
 
-def warmup_day() -> int:
-    start = db.get_setting("warmup_start_date")
-    return (db.now_local().date() - date.fromisoformat(start)).days + 1 if start else 0
+def warmup_day(acc: dict) -> int:
+    start = acc["warmup_start_date"]
+    return (db.today() - start).days + 1 if start else 0
 
 
-def in_work_hours(now: datetime | None = None) -> bool:
+def sent_today(account_id: int) -> int:
+    return db.val("""SELECT COUNT(*) FROM campaign_leads WHERE account_id=%s AND sent_day=%s
+                     AND state IN ('sent','read','replied')""", (account_id, db.today())) or 0
+
+
+def in_work_hours(acc: dict, now: datetime | None = None) -> bool:
     now = now or db.now_local()
-    a = time.fromisoformat(db.get_setting("work_start"))
-    b = time.fromisoformat(db.get_setting("work_end"))
-    t = now.time()
+    a, b, t = acc["work_start"], acc["work_end"], now.time()
     return a <= t < b if a <= b else (t >= a or t < b)
 
 
-def paused_until() -> datetime | None:
-    v = db.get_setting("paused_until")
-    if not v:
-        return None
-    dt = datetime.fromisoformat(v)
-    return dt if dt > db.now_local() else None
-
-
-async def _sleep(seconds: float):
-    """Сон, который можно прервать через wake.set()."""
-    wake.clear()
-    try:
-        await asyncio.wait_for(wake.wait(), timeout=seconds)
-    except asyncio.TimeoutError:
-        pass
+def paused_until(acc: dict) -> datetime | None:
+    pu = acc["paused_until"]
+    return pu if pu and pu > db.now_utc() else None
 
 
 # ---------- основной цикл ----------
 def recover_interrupted():
-    """После падения/перезапуска посреди отправки: неизвестно, ушло ли сообщение.
+    """После падения/перезапуска посреди отправки неизвестно, ушло ли сообщение.
     Повторять нельзя (будет дубль) — помечаем ошибкой, решение за человеком."""
-    a = db.changed("UPDATE messages SET status='failed', error=? WHERE status='sending'", (INTERRUPTED,))
-    b = db.changed("UPDATE list_items SET state='failed', error=? WHERE state='sending'", (INTERRUPTED,))
-    if a or b:
-        db.log(f"Найдено прерванных отправок: {a + b} — помечены ошибкой", "warn")
+    n = db.changed("UPDATE campaign_leads SET state='failed', error=%s WHERE state='sending'", (INTERRUPTED,))
+    if n:
+        db.log(f"Найдено прерванных отправок: {n} — помечены ошибкой", "warn")
+
+
+def finish_campaigns():
+    for c in db.q("""SELECT id, name FROM campaigns c WHERE status='running' AND NOT EXISTS
+                     (SELECT 1 FROM campaign_leads cl WHERE cl.campaign_id=c.id AND cl.state IN ('queued','sending'))"""):
+        db.ex("UPDATE campaigns SET status='done', finished_at=now() WHERE id=%s", (c["id"],))
+        db.log(f"Кампания «{c['name']}» отправлена полностью")
 
 
 async def run():
+    """Следит, чтобы у каждого подключённого аккаунта работал свой цикл отправки."""
     recover_interrupted()
+    while True:
+        try:
+            for aid, acc in list(tgm.accounts.items()):
+                if acc.authorized and (aid not in _tasks or _tasks[aid].done()):
+                    _wake[aid] = asyncio.Event()
+                    _tasks[aid] = asyncio.create_task(account_loop(aid))
+            finish_campaigns()
+        except Exception as e:
+            db.log(f"Воркер: {type(e).__name__}: {e}", "error")
+        await asyncio.sleep(10)
+
+
+async def stop():
+    for t in _tasks.values():
+        t.cancel()
+    _tasks.clear()
+
+
+async def account_loop(account_id: int):
     last_read_sync = datetime.min
     while True:
         try:
-            delay = await tick()
-            if (datetime.now() - last_read_sync) > timedelta(minutes=30) and await tg.authorized():
+            delay = await tick(account_id)
+            acc = tgm.get(account_id)
+            if acc.authorized and datetime.now() - last_read_sync > timedelta(minutes=30):
                 last_read_sync = datetime.now()
                 try:
-                    await tg.refresh_reads()
+                    await acc.refresh_reads()
                 except Exception as e:
-                    db.log(f"Синхронизация прочтений: {e}", "warn")
+                    db.log(f"Синхронизация прочтений: {e}", "warn", account_id)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            db.log(f"Воркер: непредвиденная ошибка {type(e).__name__}: {e}", "error")
+            db.log(f"Отправка: непредвиденная ошибка {type(e).__name__}: {e}", "error", account_id)
             delay = 30
-        await _sleep(delay)
+        ev = _wake.setdefault(account_id, asyncio.Event())
+        ev.clear()
+        try:
+            await asyncio.wait_for(ev.wait(), timeout=delay)
+        except asyncio.TimeoutError:
+            pass
 
 
-def _finish_empty_campaigns():
-    for c in db.q("SELECT id, name FROM campaigns WHERE status='running'"):
-        left = db.one("SELECT COUNT(*) AS n FROM messages WHERE campaign_id=? AND status='queued'", (c["id"],))["n"]
-        if left == 0:
-            db.ex("UPDATE campaigns SET status='done', finished_at=? WHERE id=?", (db.now_utc(), c["id"]))
-            db.log(f"Кампания «{c['name']}» завершена")
-    for l in db.q("SELECT id, name FROM lists WHERE status='running'"):
-        left = db.one("SELECT COUNT(*) AS n FROM list_items WHERE list_id=? AND state='queued'", (l["id"],))["n"]
-        if left == 0:
-            db.ex("UPDATE lists SET status='done' WHERE id=?", (l["id"],))
-            db.log(f"Список «{l['name']}» отправлен полностью")
+def _status(account_id: int, text: str, next_at=None) -> None:
+    state[account_id] = {"status": text, "next_send_at": next_at}
 
 
-async def tick() -> float:
-    """Одна итерация. Возвращает, сколько секунд спать до следующей."""
-    state["next_send_at"] = None
-    if not await tg.authorized():
-        state["status"] = "аккаунт не авторизован"
-        return 15
+def next_item(account_id: int) -> dict | None:
+    return db.one("""SELECT cl.* FROM campaign_leads cl JOIN campaigns c ON c.id=cl.campaign_id
+                     WHERE cl.account_id=%s AND cl.state='queued' AND c.status='running'
+                     ORDER BY c.id, cl.order_idx NULLS LAST, cl.id LIMIT 1""", (account_id,))
 
-    if tg.preparing:
-        state["status"] = "идёт поиск получателей — отправка подождёт"
-        return 15
 
-    pu = paused_until()
-    if pu:
-        state["status"] = f"пауза до {pu:%d.%m %H:%M} (ограничение Telegram)"
-        return min(60, (pu - db.now_local()).total_seconds() + 1)
-
-    _finish_empty_campaigns()
-    msg = db.one("""SELECT m.*, c.template_id FROM messages m
-                    JOIN campaigns c ON c.id=m.campaign_id
-                    WHERE m.status='queued' AND c.status='running'
-                    ORDER BY c.id, m.id LIMIT 1""")
-    item = None if msg else db.one("""SELECT li.* FROM list_items li JOIN lists l ON l.id=li.list_id
-                    WHERE li.state='queued' AND l.status='running'
-                    ORDER BY l.id, li.order_idx, li.id LIMIT 1""")
-    if not msg and not item:
-        state["status"] = "очередь пуста"
+async def tick(account_id: int) -> float:
+    """Одна итерация отправки аккаунта. Возвращает, сколько секунд спать до следующей."""
+    acc = account(account_id)
+    client = tgm.get(account_id)
+    if not acc or acc["status"] == "logged_out" or not client.authorized:
+        _status(account_id, "аккаунт не авторизован")
         return 30
-
-    if not in_work_hours():
-        state["status"] = f"вне рабочих часов ({db.get_setting('work_start')}–{db.get_setting('work_end')})"
+    if acc["status"] == "paused":
+        _status(account_id, "аккаунт на паузе (вручную)")
         return 60
+    if tgm.preparing_account(account_id):
+        _status(account_id, "идёт поиск получателей — отправка подождёт")
+        return 15
+    pu = paused_until(acc)
+    if pu:
+        _status(account_id, f"пауза до {pu.astimezone(db.now_local().tzinfo):%d.%m %H:%M} ({acc['pause_reason'] or 'ограничение Telegram'})")
+        return min(60, (pu - db.now_utc()).total_seconds() + 1)
 
-    limit, done = daily_limit(), sent_today()
+    item = next_item(account_id)
+    if not item:
+        _status(account_id, "очередь пуста")
+        return 30
+    if not in_work_hours(acc):
+        _status(account_id, f"вне рабочих часов ({acc['work_start']:%H:%M}–{acc['work_end']:%H:%M})")
+        return 60
+    limit, done = daily_limit(acc), sent_today(account_id)
     if done >= limit:
-        state["status"] = f"дневной лимит исчерпан ({done}/{limit})"
+        _status(account_id, f"дневной лимит исчерпан ({done}/{limit})")
         return 300
 
-    if msg:
-        await send_one(msg)
-    else:
-        await send_list_item(item)
-
-    s = db.all_settings()
-    lo, hi = sorted((int(s["delay_min"]), int(s["delay_max"])))
+    res = await send_item(item)
+    if res in ("flood", "peerflood"):
+        acc = account(account_id)
+        _status(account_id, f"пауза до {acc['paused_until'].astimezone(db.now_local().tzinfo):%d.%m %H:%M} ({acc['pause_reason']})")
+        return 5
+    lo, hi = sorted((acc["delay_min"], acc["delay_max"]))
     delay = random.uniform(lo, hi)
-    state["next_send_at"] = db.now_local() + timedelta(seconds=delay)
-    state["status"] = "отправка"
+    _status(account_id, "отправка", db.now_local() + timedelta(seconds=delay))
     return delay
 
 
-async def send_one(msg) -> str:
-    # «занимаем» сообщение атомарно: второй параллельный вызов получит busy, а не отправит дубль
-    if not db.changed("UPDATE messages SET status='sending' WHERE id=? AND status='queued'", (msg["id"],)):
-        return "busy"
-    contact = db.one("SELECT * FROM contacts WHERE id=?", (msg["contact_id"],))
-    if not contact or contact["opted_out"]:
-        db.ex("UPDATE messages SET status='skipped', error='отписан/удалён' WHERE id=?", (msg["id"],))
-        return "skipped"
-    tpl = db.one("SELECT body FROM templates WHERE id=?", (msg["template_id"],))
-    text = render(tpl["body"], db.contact_vars(contact))
-
-    try:
-        async with tg.lock:
-            entity = await tg.resolve(contact)
-            sent = await tg.client.send_message(entity, text)
-    except (errors.FloodWaitError, errors.PeerFloodError) as e:
-        db.ex("UPDATE messages SET status='queued' WHERE id=?", (msg["id"],))
-        return _flood(e)
-    except TRANSIENT_ERRORS:
-        db.ex("UPDATE messages SET status='queued' WHERE id=?", (msg["id"],))
-        raise
-    except RECIPIENT_ERRORS as e:
-        _fail(msg["id"], type(e).__name__.replace("Error", ""))
-        return "failed"
-    except ValueError as e:
-        _fail(msg["id"], f"получатель не найден: {e}")
-        return "failed"
-    except errors.RPCError as e:
-        _fail(msg["id"], f"{type(e).__name__}: {e}")
-        return "failed"
-    except Exception as e:   # иначе сообщение навсегда остаётся первым в очереди и блокирует её
-        _fail(msg["id"], f"{type(e).__name__}: {e}")
-        db.log(f"Сообщение #{msg['id']}: непредвиденная ошибка {type(e).__name__}: {e}", "error")
-        return "failed"
-
-    peer_id = getattr(sent, "chat_id", None) or getattr(getattr(sent, "peer_id", None), "user_id", None)
-    db.ex("""UPDATE messages SET status='sent', text=?, tg_message_id=?, peer_id=?, sent_at=?, sent_day=?, error=NULL
-             WHERE id=?""", (text, sent.id, peer_id, db.now_utc(), db.today(), msg["id"]))
-    _mark_warmup_start()
-    return "sent"
-
-
-def _mark_warmup_start():
-    if not db.get_setting("warmup_start_date"):
-        db.set_setting("warmup_start_date", db.today())
-
-
-def _flood(e) -> str:
-    if isinstance(e, errors.FloodWaitError):
-        until = db.now_local() + timedelta(seconds=e.seconds + 5)
-        db.set_setting("paused_until", until.isoformat(timespec="seconds"))
-        db.log(f"FloodWait {e.seconds} сек — пауза до {until:%H:%M:%S}", "warn")
-        return "flood"
-    until = db.now_local() + timedelta(hours=24)
-    db.set_setting("paused_until", until.isoformat(timespec="seconds"))
-    db.ex("UPDATE campaigns SET status='paused' WHERE status='running'")
-    db.ex("UPDATE lists SET status='paused' WHERE status='running'")
-    db.log("PEER_FLOOD: Telegram ограничил отправку. Всё поставлено на паузу на 24 ч. "
-           "Проверьте аккаунт через @SpamBot и снизьте лимиты.", "error")
-    return "peerflood"
-
-
-def _fail(message_id: int, err: str):
-    db.ex("UPDATE messages SET status='failed', error=? WHERE id=?", (err[:300], message_id))
-
-
-# ---------- строки списков из xlsx ----------
-def _item_fail(item_id: int, err: str, state: str = "failed"):
-    db.ex("UPDATE list_items SET state=?, error=? WHERE id=?", (state, err[:300], item_id))
-
-
-def _opted_out(user_id) -> bool:
-    return bool(user_id and db.one("SELECT 1 FROM contacts WHERE tg_user_id=? AND opted_out=1", (user_id,)))
+# ---------- отправка одного сообщения ----------
+def _fail(cl_id: int, err: str, st: str = "failed"):
+    db.ex("UPDATE campaign_leads SET state=%s, error=%s WHERE id=%s", (st, err[:300], cl_id))
 
 
 def _user_id(entity) -> int | None:
@@ -256,59 +208,113 @@ def _user_id(entity) -> int | None:
     return uid
 
 
-async def send_list_item(item) -> str:
-    """item — строка list_items, прочитанная вызывающим; отправляем, только если её состояние
-    с тех пор не изменилось (двойной клик «отправить сейчас» или гонка с воркером → busy)."""
-    prev = item["state"]
-    if not db.changed("UPDATE list_items SET state='sending' WHERE id=? AND state=?", (item["id"], prev)):
+def _flood(account_id: int, e) -> str:
+    if isinstance(e, errors.FloodWaitError):
+        until = db.now_utc() + timedelta(seconds=e.seconds + 5)
+        db.ex("UPDATE tg_accounts SET paused_until=%s, pause_reason=%s WHERE id=%s",
+              (until, f"FloodWait {e.seconds} сек", account_id))
+        db.log(f"FloodWait {e.seconds} сек — пауза аккаунта", "warn", account_id)
+        return "flood"
+    until = db.now_utc() + timedelta(hours=24)
+    db.ex("UPDATE tg_accounts SET paused_until=%s, pause_reason='PEER_FLOOD' WHERE id=%s", (until, account_id))
+    db.log("PEER_FLOOD: Telegram ограничил отправку с этого аккаунта. Его очередь на паузе 24 ч, "
+           "лиды остаются за ним. Проверьте аккаунт через @SpamBot и снизьте лимиты.", "error", account_id)
+    return "peerflood"
+
+
+async def send_item(item: dict) -> str:
+    """item — строка campaign_leads с назначенным аккаунтом, прочитанная вызывающим. Отправляем, только
+    если её состояние с тех пор не изменилось (двойной клик или гонка с воркером → busy)."""
+    prev, cl_id, account_id = item["state"], item["id"], item["account_id"]
+    if not account_id:
+        return "no_account"
+    if not db.changed("UPDATE campaign_leads SET state='sending' WHERE id=%s AND state=%s", (cl_id, prev)):
         return "busy"
-    text = (item["text"] or "").strip()
+    lead = db.one("SELECT * FROM leads WHERE id=%s", (item["lead_id"],))
+    if lead["opted_out_at"]:
+        _fail(cl_id, "лид отписался", "skipped")
+        return "skipped"
+    if lead["owner_account_id"] and lead["owner_account_id"] != account_id:
+        _fail(cl_id, "лид закреплён за другим аккаунтом", "skipped")
+        return "skipped"
+    text = campaigns.text_for(item, lead)
     if not text:
-        _item_fail(item["id"], "нет текста", "skipped")
+        _fail(cl_id, "нет текста", "skipped")
         return "skipped"
-    is_person = item["kind"] != "chat"
-    if is_person and item["peer_id"] and _opted_out(item["peer_id"]):
-        _item_fail(item["id"], "контакт отписался", "skipped")
-        return "skipped"
+    client: AccountClient = tgm.get(account_id)
+    if not client.authorized:
+        db.ex("UPDATE campaign_leads SET state=%s WHERE id=%s", (prev, cl_id))
+        return "no_account"
+    is_person = lead["kind"] != "chat"
     try:
-        async with tg.lock:
-            entity = await tg.resolve_item(item)
+        async with client.lock:
+            entity = await client.resolve(lead)
             uid = _user_id(entity) if is_person else None
-            if uid and uid != item["peer_id"]:
-                # адресат был указан только username: запоминаем id, чтобы ловить прочтения/ответы/отписку
-                if _opted_out(uid):
-                    _item_fail(item["id"], "контакт отписался", "skipped")
+            if uid and uid != lead["tg_id"]:
+                # адресат был указан только username/телефоном: запоминаем id, чтобы ловить прочтения/ответы/отписку
+                twin = db.one("SELECT id, opted_out_at FROM leads WHERE tg_id=%s AND id!=%s", (uid, lead["id"]))
+                if twin and twin["opted_out_at"]:
+                    _fail(cl_id, "лид отписался", "skipped")
                     return "skipped"
-                db.ex("UPDATE list_items SET peer_id=? WHERE id=?", (uid, item["id"]))
+                if not twin:
+                    db.ex("UPDATE leads SET tg_id=%s WHERE id=%s", (uid, lead["id"]))
             reply_to = item["topic_id"] if item["topic_id"] and item["topic_id"] > 1 else None
             if type(entity).__name__ == "InputPeerChat":   # обычная группа — тем (форума) не бывает
                 reply_to = None
-            sent = await tg.client.send_message(entity, text, reply_to=reply_to, link_preview=True)
+            sent = await client.client.send_message(entity, text, reply_to=reply_to, link_preview=True)
     except (errors.FloodWaitError, errors.PeerFloodError) as e:
-        db.ex("UPDATE list_items SET state=? WHERE id=?", (prev, item["id"]))
-        return _flood(e)
+        db.ex("UPDATE campaign_leads SET state=%s WHERE id=%s", (prev, cl_id))
+        return _flood(account_id, e)
     except TRANSIENT_ERRORS:
-        db.ex("UPDATE list_items SET state=? WHERE id=?", (prev, item["id"]))
+        db.ex("UPDATE campaign_leads SET state=%s WHERE id=%s", (prev, cl_id))
         raise
     except RECIPIENT_ERRORS as e:
-        _item_fail(item["id"], type(e).__name__.replace("Error", ""))
-        return "failed"
-    except (errors.ChannelPrivateError, errors.ChatAdminRequiredError, errors.ChatRestrictedError,
-            errors.SlowModeWaitError, errors.ChatSendPlainForbiddenError, errors.ChatWriteForbiddenError) as e:
-        _item_fail(item["id"], f"{type(e).__name__.replace('Error', '')}: {e}")
+        _fail(cl_id, f"{type(e).__name__.replace('Error', '')}: {e}")
         return "failed"
     except ValueError as e:
-        _item_fail(item["id"], f"получатель не найден: {e}")
+        _fail(cl_id, f"получатель не найден: {e}")
         return "failed"
     except errors.RPCError as e:
-        _item_fail(item["id"], f"{type(e).__name__}: {e}")
+        _fail(cl_id, f"{type(e).__name__}: {e}")
         return "failed"
-    except Exception as e:
-        _item_fail(item["id"], f"{type(e).__name__}: {e}")
-        db.log(f"Строка #{item['id']}: непредвиденная ошибка {type(e).__name__}: {e}", "error")
+    except Exception as e:   # иначе строка навсегда остаётся первой в очереди и блокирует её
+        _fail(cl_id, f"{type(e).__name__}: {e}")
+        db.log(f"Строка #{cl_id}: непредвиденная ошибка {type(e).__name__}: {e}", "error", account_id)
         return "failed"
 
-    db.ex("""UPDATE list_items SET state='sent', tg_message_id=?, sent_at=?, sent_day=?, error=NULL WHERE id=?""",
-          (sent.id, db.now_utc(), db.today(), item["id"]))
-    _mark_warmup_start()
+    with db.tx():
+        db.ex("""UPDATE campaign_leads SET state='sent', tg_message_id=%s, sent_at=now(), sent_day=%s, error=NULL
+                 WHERE id=%s""", (sent.id, db.today(), cl_id))
+        db.ex("""INSERT INTO messages(account_id, lead_id, campaign_lead_id, direction, tg_message_id, text)
+                 VALUES (%s, %s, %s, 'out', %s, %s)""", (account_id, lead["id"], cl_id, sent.id, text))
+        db.ex("UPDATE leads SET owner_account_id=%s WHERE id=%s AND owner_account_id IS NULL", (account_id, lead["id"]))
+        db.ex("UPDATE tg_accounts SET warmup_start_date=%s WHERE id=%s AND warmup_start_date IS NULL",
+              (db.today(), account_id))
     return "sent"
+
+
+async def send_now(cl_id: int) -> tuple[str, str]:
+    """«▶ Отправить сейчас» для одной строки: мимо лимита и рабочих часов, но по общим правилам
+    закрепления, отписки и паузы аккаунта. Возвращает (результат, пояснение)."""
+    cl = db.one("SELECT * FROM campaign_leads WHERE id=%s", (cl_id,))
+    if not cl:
+        return "error", "строка не найдена"
+    if cl["state"] not in ("new", "queued", "failed", "skipped"):
+        return "error", "эта строка уже отправлена"
+    if cl["state"] != "queued" or not cl["account_id"]:
+        # назначаем аккаунт по тем же правилам, что и очередь
+        n, _ = campaigns.enqueue(cl["campaign_id"], {"ids": [cl_id]})
+        cl = db.one("SELECT * FROM campaign_leads WHERE id=%s", (cl_id,))
+        if not n:
+            return "skipped", cl["error"] or "строку нельзя поставить в очередь"
+    acc = account(cl["account_id"])
+    if not tgm.get(acc["id"]).authorized:
+        return "error", f"аккаунт «{acc['label'] or acc['id']}» не авторизован"
+    if tgm.preparing_account(acc["id"]):
+        return "error", "идёт поиск получателей — отправьте, когда он закончится"
+    pu = paused_until(acc)
+    if pu:
+        return "error", f"аккаунт на паузе до {pu.astimezone(db.now_local().tzinfo):%d.%m %H:%M} из-за ограничения Telegram"
+    res = await send_item(cl)
+    cl = db.one("SELECT * FROM campaign_leads WHERE id=%s", (cl_id,))
+    return res, cl["error"] or ""

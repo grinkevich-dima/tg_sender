@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<article style="max-width:420px;margin:auto">
+<header><strong>Вход в панель</strong></header>
+<form method="post" action="/login">
+  <input type="hidden" name="next" value="{{ next }}">
+  <label>Логин<input name="login" required autofocus autocomplete="username"></label>
+  <label>Пароль<input type="password" name="password" required autocomplete="current-password"></label>
+  <button>Войти</button>
+</form>
+</article>
+{% endblock %}

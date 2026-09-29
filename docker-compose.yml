@@ -1,10 +1,44 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tg
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tg}
+      POSTGRES_DB: tg
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tg -d tg"]
+      interval: 3s
+      retries: 20
+    restart: unless-stopped
+
   tg-sender:
     build: .
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql://tg:${POSTGRES_PASSWORD:-tg}@postgres:5432/tg
+    depends_on:
+      postgres: { condition: service_healthy }
     ports: ["127.0.0.1:8000:8000"]   # наружу не открываем
     volumes:
       - ./data:/app/data
       - ./app:/app/app                # код подхватывается без пересборки
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
     restart: unless-stopped
+
+  # Тесты: docker compose run --rm tests   (или scripts/test.sh)
+  tests:
+    profiles: ["test"]
+    build: { context: ., args: { DEV: "1" } }
+    environment:
+      TEST_DATABASE_URL: postgresql://tg:${POSTGRES_PASSWORD:-tg}@postgres:5432/tg_test
+      SAMPLE_XLSX: ${SAMPLE_XLSX_IN_CONTAINER:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes:
+      - .:/app
+    command: ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"]
+
+volumes:
+  pgdata:

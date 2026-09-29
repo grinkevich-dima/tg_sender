@@ -1,113 +1,96 @@
 # Архитектура
 
-Один процесс Python: веб-сервер FastAPI, клиент Telethon и фоновый отправщик работают в одном цикле asyncio.
+Один процесс Python: веб-сервер FastAPI, клиенты Telethon (по одному на аккаунт) и фоновая отправка работают в одном цикле asyncio. Данные — в Postgres.
 
 ```
-Браузер ──HTTP──▶ FastAPI (app/main.py) ──▶ SQLite (data/sender.db)
-                        │                         ▲
-                        ▼                         │
-                  TgManager (app/tg.py) ◀──── Worker (app/worker.py)
-                        │  MTProto                 цикл: выбрать сообщение → лимиты → отправить
+Браузер ──HTTP──▶ FastAPI (app/web/*) ──▶ Postgres
+                        │                    ▲
+                        ▼                    │
+              TgPool (app/tg.py)  ◀──── worker (app/worker.py)
+          AccountClient × N аккаунтов     цикл на каждый аккаунт: очередь → лимиты → отправка
+                        │ MTProto
                         ▼
-                    Telegram  ──события──▶ NewMessage / MessageRead → статусы «ответил» / «прочитано»
+                    Telegram ──события──▶ NewMessage / MessageRead → «ответил» / «прочитано»
 ```
 
 ## Модули
 
 | Файл | Назначение |
 |---|---|
-| `app/config.py` | чтение `.env`, пути, часовой пояс, настройки по умолчанию |
-| `app/db.py` | подключение к SQLite (WAL), схема, миграции колонок, настройки, журнал |
-| `app/main.py` | маршруты панели, Basic-auth, защита от CSRF (Origin/Referer) и чужих хостов, одноразовые сообщения (cookie) |
-| `app/tg.py` | `TgManager`: вход (код, 2FA, QR), импорт контактов, поиск получателей, обработчики событий |
-| `app/worker.py` | фоновая отправка: лимиты, рабочие часы, паузы, обработка ошибок Telegram |
+| `app/config.py` | `.env`, пути, ключ подписи, часовой пояс, общие настройки по умолчанию |
+| `app/db.py` | пул соединений psycopg 3, помощники `q/one/val/ex/changed`, транзакции `tx()` (вложенные — точки сохранения), миграции |
+| `app/migrations/*.sql` | схема базы; применяются по порядку при старте |
+| `app/auth.py` | пользователи и пароли (scrypt), роли, cookie-сессия, защита от CSRF, перенос старой сессии |
+| `app/leads.py` | поиск дубликатов, импорт CSV и из Telegram, стоп-слова, отписка |
+| `app/campaigns.py` | импорт xlsx, кампании по шаблону, фильтры, очередь, распределение лидов по аккаунтам |
+| `app/tg.py` | `AccountClient`: вход (код, 2FA, QR), поиск адресата, «Найти получателей», обработчики событий; `TgPool` — все аккаунты |
+| `app/worker.py` | отправка: цикл на каждый аккаунт, лимиты, прогрев, паузы, обработка ошибок Telegram |
+| `app/web/*.py` | страницы по разделам: `users`, `misc` (дашборд, правила, журнал), `accounts`, `leads`, `templates_routes`, `campaigns` |
 | `app/templating.py` | переменные `{…}` и спинтакс `{a\|b}` |
-| `app/outreach.py` | списки xlsx: разбор колонок и ссылок, фильтры, постановка в очередь |
-| `app/xlsx.py` | чтение `.xlsx` без сторонних библиотек (zip + XML) |
-| `app/templates/*.html` | Jinja2-шаблоны страниц; стили — Pico CSS (`app/static`) |
-| `tests/` | pytest с имитацией Telegram-клиента |
+| `app/xlsx.py` | чтение `.xlsx` без сторонних библиотек |
 
 ## Схема БД
 
-| Таблица | Ключевые поля |
+| Таблица | Назначение |
 |---|---|
-| `settings` | `key`, `value` — лимиты, паузы, рабочие часы, стоп-слова, `paused_until`, `warmup_start_date` |
-| `contacts` | `tg_user_id`, `username`, `phone`, `first_name`, `last_name`, `extra` (JSON), `tags`, `opted_out` |
-| `templates` | `name`, `body` |
-| `campaigns` | `template_id`, `status` (draft / running / paused / done) |
-| `messages` | `campaign_id`, `contact_id`, `status`, `text`, `tg_message_id`, `peer_id`, `error`, `sent_at`, `sent_day`, `read_at`, `replied_at` |
-| `lists` | `name`, `filename`, `status` |
-| `list_items` | `kind`, `title`, `peer_id` (marked ID), `username`, `topic_id`, `dialog` (файл), `real_dialog` (Telegram), `address`, `text`, `src_status`, `src_group`, `state`, `order_idx`, `error`, `tg_message_id`, `sent_*`/`read_at`/`replied_at` |
-| `tg_dialogs` | `peer_id`, `title`, `kind` — снимок диалогов для поиска чатов по названию |
-| `event_log` | `ts`, `level`, `text` |
+| `users` | команда: логин, имя, хэш пароля, роль, активен |
+| `tg_accounts` | аккаунты Telegram: владелец-менеджер, данные профиля, статус, лимиты, прогрев, рабочие часы, `paused_until` |
+| `leads` | люди и чаты: `tg_id`, `username`, `phone` (уникальны), имя, `extra` (переменные), `tags[]`, **`owner_account_id`**, `opted_out_at` |
+| `templates` | библиотека текстов |
+| `campaigns` | кампании: источник (`template`/`xlsx`), статус, автор |
+| `campaign_accounts` | с каких аккаунтов идёт кампания |
+| `campaign_steps` | текст шага (сейчас шаг 1; дожимы — следующий этап) |
+| `campaign_leads` | лид в кампании: аккаунт, состояние, свой текст из xlsx, тема форума, поля файла для фильтров, ошибка, время отправки/прочтения/ответа |
+| `messages` | вся переписка: исходящие из кампаний и входящие ответы |
+| `tg_dialogs` | снимок диалогов аккаунта: поиск чатов по названию, «есть ли переписка» |
+| `settings` | правила команды: стоп-слова, `recontact_days` |
+| `event_log` | журнал |
 
-Новые колонки добавляются в `db.conn()` через `ALTER TABLE … ADD COLUMN`, ошибка «колонка уже есть» игнорируется.
+## Отправка (`worker`)
 
-## Отправщик (`worker.tick`)
+`worker.run()` раз в 10 секунд следит, чтобы у каждого подключённого аккаунта работал свой цикл, и закрывает кампании без очереди. Итерация цикла аккаунта (`tick`):
 
-1. Аккаунт не авторизован → ждать 15 с.
-2. Идёт «Найти получателей» → ждать 15 с. Действует `paused_until` (FloodWait / PEER_FLOOD) → ждать.
-3. Закрыть кампании и списки без очереди (`done`).
-4. Взять следующее: сначала `messages` запущенных кампаний, потом `list_items` запущенных списков (по `order_idx`).
-5. Вне рабочих часов → ждать 60 с. Лимит дня исчерпан → ждать 5 мин.
-6. Атомарно перевести строку в `sending` (если её уже взял другой запрос — пропустить), отправить, записать результат, выждать случайную паузу `delay_min…delay_max`.
+1. Аккаунт не авторизован / на ручной паузе / идёт «Найти получателей» → ждать.
+2. Действует `paused_until` (FloodWait, PEER_FLOOD) → ждать.
+3. Взять следующую строку **этого аккаунта** из запущенных кампаний (по `order_idx`).
+4. Вне рабочих часов → ждать 60 с. Лимит дня аккаунта исчерпан → ждать 5 мин.
+5. Атомарно перевести строку в `sending` (если её уже взял другой запрос — пропустить), найти адресата, отправить, записать в `campaign_leads` и `messages`, выждать случайную паузу.
 
-Сон прерывается событием `worker.wake`: его выставляют запуск кампании, смена настроек и вход в аккаунт.
+Ошибки:
+- `FloodWaitError` → `paused_until` аккаунта = сейчас + N;
+- `PeerFloodError` → пауза аккаунта 24 ч; кампании продолжают идти с других аккаунтов, но лиды этого аккаунта ждут его;
+- ошибки получателя и непредвиденные → `failed` с причиной;
+- сетевой сбой → строка возвращается в прежнее состояние;
+- строки, оставшиеся в `sending` после падения процесса, при старте помечаются `failed` («прервано…») и не повторяются.
 
-Обработка ошибок:
-- `FloodWaitError` → `paused_until = now + N`;
-- `PeerFloodError` → пауза 24 ч, все кампании и списки `paused`;
-- ошибки получателя и любые непредвиденные → `failed` с причиной (очередь не блокируется);
-- сетевой сбой → строка возвращается в прежнее состояние, повтор позже;
-- строки, оставшиеся в `sending` после падения процесса, при старте помечаются `failed` («прервано…») — повторно не отправляются, чтобы не было дублей.
+## Распределение лидов (`campaigns.enqueue`)
 
-Telethon создаётся с `flood_sleep_threshold=0`, поэтому FloodWait обрабатывает сам отправщик. Во время «Найти получателей» порог временно поднимается до 300 с; поиск держит `tg.lock`, поэтому отправка в это время не идёт.
-
-## Поиск получателей (`TgManager.prepare_list`)
-
-1. `iter_dialogs()` — Telethon кэширует `access_hash` всех собеседников в сессии; диалоги пишутся в `tg_dialogs`; для людей из списка выставляется `real_dialog`.
-2. Для людей, которых нет в кэше, — `iter_participants()` по чатам из списка.
-
-Разрешение адресата (`resolve_item`): `peer_id` → альтернативная запись ID (`-100…` ↔ `-…`) → `username` → для чатов поиск по названию в `tg_dialogs`.
+1. Отфильтрованные строки в состояниях `new/failed/skipped`.
+2. Пропуск с причиной: отписан; закреплён за аккаунтом не из этой кампании; команда писала ему меньше `recontact_days` дней назад (только люди).
+3. Если аккаунтов несколько и есть незакреплённые люди — нужен снимок диалогов каждого аккаунта («Найти получателей»).
+4. Порядок: чат → с диалогом → без диалога.
+5. Незакреплённый лид получает аккаунт, у которого с ним есть личная переписка, иначе наименее загруженный; `leads.owner_account_id` фиксируется в той же транзакции.
 
 ## События Telegram
 
-- `NewMessage(incoming, private)` → статус «ответил» у сообщений этому человеку; стоп-слово → `opted_out` и «пропущено» в очередях; затем вызываются хуки `incoming_hooks`.
-- `MessageRead(outbox)` → «прочитано» до `max_id`.
+- `NewMessage(incoming, private)` → запись в `messages`, «ответил» у строк этого аккаунта; стоп-слово → отписка лида для всей команды; затем хуки `incoming_hooks`.
+- `MessageRead(outbox)` → «прочитано» у строк этого аккаунта до `max_id`.
 - Досинхронизация прочтений (`refresh_reads`) — раз в 30 мин и по кнопке.
 
-## Точка расширения: ИИ-ответы
+## Точка расширения: разбор ответов
 
-`app/tg.py` → список `incoming_hooks`. Каждая функция `async def hook(event, contact_row)` вызывается на каждое входящее личное сообщение. Здесь можно подключить автоответчик (например, Claude API):
-
-```python
-from app.tg import incoming_hooks
-
-async def ai_reply(event, contact):
-    if contact is None:          # отвечать только известным контактам
-        return
-    text = await ask_llm(event.raw_text)
-    await event.reply(text)
-
-incoming_hooks.append(ai_reply)
-```
-
-Альтернатива без риска для рассылки — отдельный Telegram Business-бот (нужен Premium), подключённый к аккаунту.
+`app/tg.py` → список `incoming_hooks`. Функция `async def hook(account_client, event, lead_row)` вызывается на каждое входящее личное сообщение — сюда подключится ИИ-классификация ответов.
 
 ## Маршруты
 
-| Метод | Путь | Назначение |
-|---|---|---|
-| GET | `/` | дашборд |
-| GET/POST | `/auth`, `/auth/phone`, `/auth/code`, `/auth/password`, `/auth/logout` | вход по коду |
-| GET | `/auth/qr`, `/auth/qr/status`, `/auth/qr/done` | вход по QR |
-| GET/POST | `/contacts`, `/contacts/import-tg`, `/contacts/import-csv`, `/contacts/{id}/optout`, `/contacts/delete` | контакты |
-| GET/POST | `/templates`, `/templates/save`, `/templates/{id}/test`, `/templates/{id}/delete` | шаблоны |
-| GET/POST | `/campaigns`, `/campaigns/create`, `/campaigns/{id}`, `/campaigns/{id}/{start\|pause\|retry\|delete}`, `/campaigns/{id}/export.csv` | кампании |
-| GET/POST | `/lists`, `/lists/upload`, `/lists/{id}`, `/lists/{id}/enqueue`, `/lists/{id}/{start\|pause\|unqueue\|prepare\|delete}`, `/lists/{id}/prepare-status`, `/lists/{id}/export.csv` | списки xlsx |
-| POST | `/lists/item/{id}/send`, `/lists/item/{id}/{skip\|reset}` | действия со строкой |
-| POST | `/reads/refresh` | обновить прочтения |
-| GET/POST | `/settings` | прогрев и лимиты |
-| GET | `/log` | журнал |
+| Раздел | Пути |
+|---|---|
+| Вход | `/setup`, `/login`, `/logout`, `/me` |
+| Команда | `/users`, `/users/create`, `/users/{id}/toggle`, `/users/{id}/password` |
+| Аккаунты | `/accounts`, `/accounts/create`, `/accounts/{id}` (настройки), `/accounts/{id}/login`, `/phone`, `/code`, `/password`, `/qr`, `/qr/status`, `/qr/done`, `/logout`, `/pause`, `/resume`, `/import`, `/delete` |
+| Лиды | `/leads`, `/leads/import-csv`, `/leads/{id}/optout`, `/leads/delete` |
+| Шаблоны | `/templates`, `/templates/save`, `/templates/{id}/test`, `/templates/{id}/delete` |
+| Кампании | `/campaigns`, `/campaigns/create`, `/campaigns/upload`, `/campaigns/{id}`, `/enqueue`, `/accounts`, `/{start\|pause\|unqueue\|retry\|prepare\|delete}`, `/prepare-status`, `/export.csv`; строки — `/campaigns/row/{id}/{send\|skip\|reset}` |
+| Прочее | `/` (дашборд), `/reads/refresh`, `/settings` (правила), `/log` |
 
-Все POST-формы после обработки перенаправляют (Post/Redirect/Get). Сообщение об успехе или ошибке передаётся одноразовой cookie `flash`, а не в адресе страницы.
+Все POST-формы после обработки перенаправляют (Post/Redirect/Get). Сообщение передаётся одноразовой cookie `flash`.

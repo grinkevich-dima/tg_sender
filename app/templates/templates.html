@@ -18,14 +18,16 @@
 
 {% for t in rows %}
 <article>
-  <header><strong>{{ t.name }}</strong> <small class="muted">#{{ t.id }} · переменные: {{ vars[t.id]|join(', ') or 'нет' }}</small></header>
+  <header><strong>{{ t.name }}</strong> <small class="muted">#{{ t.id }} · {{ t.author or '' }} · переменные: {{ vars[t.id]|join(', ') or 'нет' }}</small></header>
   <div class="grid">
     <div><small class="muted">Шаблон</small><pre class="tpl">{{ t.body }}</pre></div>
-    <div><small class="muted">Пример для первого контакта</small><pre class="tpl">{{ previews[t.id] }}</pre></div>
+    <div><small class="muted">Пример для первого лида</small><pre class="tpl">{{ previews[t.id] }}</pre></div>
   </div>
   <footer class="row-actions">
     <a href="/templates?edit={{ t.id }}" role="button" class="outline">Изменить</a>
-    <form method="post" action="/templates/{{ t.id }}/test"><button class="outline">Тест в «Избранное»</button></form>
+    {% if accounts %}<form method="post" action="/templates/{{ t.id }}/test" style="display:inline-flex;gap:.3rem">
+      <select name="account_id" style="margin:0;padding:.2rem .5rem;font-size:.85em">{% for a in accounts %}<option value="{{ a.id }}">{{ a.label or a.first_name }}</option>{% endfor %}</select>
+      <button class="outline">Тест в «Избранное»</button></form>{% endif %}
     <form method="post" action="/templates/{{ t.id }}/delete" onsubmit="return confirm('Удалить шаблон?')"><button class="outline secondary">Удалить</button></form>
   </footer>
 </article>

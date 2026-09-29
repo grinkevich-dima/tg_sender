@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid">
+<article>
+  <header><strong>Импорт из Telegram</strong></header>
+  {% if accounts %}
+  <form method="post" id="imp" action="/accounts/{{ accounts[0].id }}/import">
+    <select onchange="document.getElementById('imp').action='/accounts/'+this.value+'/import'">
+      {% for a in accounts %}<option value="{{ a.id }}">{{ a.label or a.first_name or ('#' ~ a.id) }}</option>{% endfor %}
+    </select>
+    <select name="source">
+      <option value="contacts">Записная книжка</option>
+      <option value="dialogs">Все, с кем есть личная переписка</option>
+    </select>
+    <input name="tag" placeholder="Тег (необязательно), напр. clients">
+    <button>Импортировать</button>
+  </form>
+  <small class="muted">Импортированные лиды закрепляются за выбранным аккаунтом: эти люди его уже знают.</small>
+  {% else %}<p class="muted">Сначала <a href="/accounts">подключите аккаунт</a>.</p>{% endif %}
+</article>
+<article>
+  <header><strong>Импорт из CSV</strong></header>
+  <form method="post" action="/leads/import-csv" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".csv,text/csv" required>
+    <input name="tag" placeholder="Тег для всех строк (необязательно)">
+    <button>Загрузить</button>
+  </form>
+  <small class="muted">Колонки: <code>username</code>, <code>phone</code>, <code>user_id</code>, <code>first_name</code>, <code>last_name</code>, <code>tags</code>. Любые другие станут переменными шаблона, например <code>{company}</code>. Дубликаты по ID, username и телефону объединяются.</small>
+</article>
+</div>
+
+<form method="get" class="grid">
+  <input name="s" value="{{ s }}" placeholder="Поиск по имени / username / телефону / названию">
+  <select name="tag"><option value="">Все теги</option>{% for t in tags %}<option {% if t==tag %}selected{% endif %}>{{ t }}</option>{% endfor %}</select>
+  <select name="owner">
+    <option value="">Все аккаунты</option>
+    <option value="mine" {% if owner=='mine' %}selected{% endif %}>Мои лиды</option>
+    <option value="none" {% if owner=='none' %}selected{% endif %}>Ни за кем не закреплены</option>
+    {% for a in all_accounts %}<option value="{{ a.id }}" {% if owner==a.id|string %}selected{% endif %}>{{ a.label or a.first_name }}</option>{% endfor %}
+  </select>
+  <button class="outline">Фильтр</button>
+</form>
+<p class="muted">Найдено: {{ total }}</p>
+<table>
+<thead><tr><th>#</th><th>Лид</th><th>Контакты</th><th>Теги</th><th>Аккаунт</th><th>Переписка</th><th></th></tr></thead>
+<tbody>
+{% for l in rows %}
+<tr {% if l.opted_out_at %}style="opacity:.5"{% endif %}>
+  <td>{{ l.id }}</td>
+  <td>{{ l.title or ((l.first_name ~ ' ' ~ l.last_name)|trim) or '—' }} <small class="muted">{{ KIND_RU[l.kind] }}</small>
+      {% if l.opted_out_at %}<br><span class="badge b-skipped">отписан</span> <small class="muted">{{ l.opt_out_reason or '' }}</small>{% endif %}</td>
+  <td><small>{% if l.username %}@{{ l.username }}<br>{% endif %}{{ l.phone or '' }}{% if l.tg_id %}<br><span class="muted">ID {{ l.tg_id }}</span>{% endif %}</small></td>
+  <td><small>{{ l.tags|join(', ') }}</small></td>
+  <td><small>{{ l.owner_label or l.owner_first or '—' }}</small></td>
+  <td><small>{% if l.last_out %}писали {{ l.last_out|dt }}{% endif %}{% if l.last_in %}<br>ответ {{ l.last_in|dt }}{% endif %}</small></td>
+  <td class="row-actions"><form method="post" action="/leads/{{ l.id }}/optout"><button class="outline secondary">{{ 'вернуть' if l.opted_out_at else 'исключить' }}</button></form></td>
+</tr>
+{% endfor %}
+</tbody></table>
+{% if total > p*per_page %}<a href="?s={{ s }}&tag={{ tag }}&owner={{ owner }}&p={{ p+1 }}">Следующая страница →</a>{% endif %}
+
+{% if is_admin %}
+<details><summary class="muted">Удаление лидов</summary>
+<form method="post" action="/leads/delete" class="grid">
+  <select name="tag"><option value="">ВСЕ лиды без переписки</option>{% for t in tags %}<option>{{ t }}</option>{% endfor %}</select>
+  <input name="confirm" placeholder="Введите «да»">
+  <button class="secondary">Удалить</button>
+</form>
+<small class="muted">Лиды, с которыми была переписка, не удаляются: иначе пропадёт история и защита от повторных сообщений.</small></details>
+{% endif %}
+{% endblock %}

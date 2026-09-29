@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<article style="max-width:520px;margin:auto">
+<header><strong>Вход в Telegram</strong> <small class="muted">· {{ acc.label or ('аккаунт #' ~ acc.id) }}</small></header>
+{% if not configured %}
+  <p>Сначала укажите <code>TG_API_ID</code> и <code>TG_API_HASH</code> в файле <code>.env</code> (получить на <a href="https://my.telegram.org/apps" target="_blank">my.telegram.org/apps</a>) и перезапустите панель.</p>
+{% elif step == 'done' %}
+  <p>✅ Подключён: <b>{{ me }}</b></p>
+  <a href="/accounts" role="button">К аккаунтам</a>
+{% elif step == 'code' %}
+  <form method="post" action="/accounts/{{ acc.id }}/code">
+    <label>Код из Telegram (отправлен на {{ phone }})<input name="code" autocomplete="one-time-code" required autofocus></label>
+    <button>Войти</button>
+  </form>
+  <a href="/accounts/{{ acc.id }}/login">← другой номер</a> · <a href="/accounts/{{ acc.id }}/qr">войти по QR-коду</a>
+{% elif step == 'password' %}
+  <form method="post" action="/accounts/{{ acc.id }}/password">
+    <label>Облачный пароль (2FA)<input type="password" name="password" required autofocus></label>
+    <button>Подтвердить</button>
+  </form>
+{% else %}
+  <a href="/accounts/{{ acc.id }}/qr" role="button" style="width:100%">📷 Войти по QR-коду</a>
+  <p style="text-align:center">или по номеру</p>
+  <form method="post" action="/accounts/{{ acc.id }}/phone">
+    <label>Номер телефона<input name="phone" placeholder="+375 29 123 45 67" required></label>
+    <button class="secondary">Получить код</button>
+  </form>
+  <small class="muted">Код придёт в приложение Telegram (чат «Telegram»), а не по SMS. Нажимайте «Получить код» один раз.</small>
+{% endif %}
+</article>
+{% endblock %}

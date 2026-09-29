@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+{% if not configured %}<div class="flash err">Не заданы TG_API_ID и TG_API_HASH в файле .env — подключить аккаунты нельзя. См. docs/quickstart.md.</div>{% endif %}
+<h3>Аккаунты Telegram</h3>
+<table>
+<thead><tr><th>Аккаунт</th>{% if is_admin %}<th>Менеджер</th>{% endif %}<th>Статус</th><th>Сегодня</th><th>Прогрев</th><th>Лидов / в очереди</th><th>Отправка</th><th></th></tr></thead>
+{% for a in rows %}
+<tr>
+  <td><a href="/accounts/{{ a.id }}"><b>{{ a.label or a.first_name or ('#' ~ a.id) }}</b></a>
+      <br><small class="muted">{% if a.client.authorized %}{{ a.client.display() }} {{ a.phone or '' }}{% elif a.first_name %}{{ a.first_name }} {{ a.phone or '' }}{% else %}не подключён{% endif %}</small></td>
+  {% if is_admin %}<td><small>{{ a.user_name }}</small></td>{% endif %}
+  <td><span class="badge b-{{ a.status }}">{{ ACCOUNT_STATUS_RU[a.status] }}</span>
+      {% if a.status in ('active','paused') and not a.client.authorized %}<br><small class="log-error">нет связи с Telegram</small>{% endif %}
+      {% if a.paused %}<br><small class="log-warn">ограничение до {{ a.paused|dt }}</small>{% endif %}</td>
+  <td>{{ a.sent_today }} / {{ a.limit }}</td>
+  <td><small>{% if a.warmup_enabled %}день {{ a.warmup_day or '—' }}{% else %}выкл.{% endif %}</small></td>
+  <td>{{ a.leads }} / {{ a.queued }}</td>
+  <td><small>{{ a.wstate.status or '—' }}{% if a.wstate.next_send_at %}<br>след. ≈ {{ a.wstate.next_send_at.strftime('%H:%M:%S') }}{% endif %}</small></td>
+  <td class="row-actions">
+    {% if a.client.authorized %}
+      {% if a.status == 'active' %}<form method="post" action="/accounts/{{ a.id }}/pause"><button class="outline secondary">⏸</button></form>
+      {% elif a.status == 'paused' %}<form method="post" action="/accounts/{{ a.id }}/resume"><button class="outline">▶</button></form>{% endif %}
+      <a href="/accounts/{{ a.id }}" role="button" class="outline">Настройки</a>
+    {% else %}
+      <a href="/accounts/{{ a.id }}/login" role="button">Войти</a>
+      {% if a.status == 'new' %}<form method="post" action="/accounts/{{ a.id }}/delete"><button class="outline secondary">Удалить</button></form>{% endif %}
+    {% endif %}
+  </td>
+</tr>
+{% else %}<tr><td colspan="8" class="muted">Пока нет аккаунтов — подключите свой ниже</td></tr>{% endfor %}
+</table>
+
+<article>
+<header><strong>Подключить аккаунт</strong></header>
+<form method="post" action="/accounts/create" class="grid">
+  <input name="label" placeholder="Подпись, напр. «Дмитрий, продажи»">
+  {% if is_admin %}<select name="owner">{% for u in users %}<option value="{{ u.id }}" {% if u.id == user.id %}selected{% endif %}>Менеджер: {{ u.name }}</option>{% endfor %}</select>{% endif %}
+  <button>Далее → вход в Telegram</button>
+</form>
+<small class="muted">Подключайте только свой личный аккаунт: переписка идёт от вашего имени. Лиды, которым вы написали, закрепляются за этим аккаунтом — коллеги им писать не будут.</small>
+</article>
+{% endblock %}

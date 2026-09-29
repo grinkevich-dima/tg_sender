@@ -1,5 +1,5 @@
 {% extends "base.html" %}
 {% block content %}
 <h3>Журнал событий</h3>
-<table>{% for l in log %}<tr class="log-{{ l.level }}"><td style="white-space:nowrap"><small>{{ l.ts[:16].replace('T',' ') }}</small></td><td>{{ l.level }}</td><td>{{ l.text }}</td></tr>{% endfor %}</table>
+<table>{% for l in log %}<tr class="log-{{ l.level }}"><td style="white-space:nowrap"><small>{{ l.ts|dt('%d.%m %H:%M:%S') }}</small></td><td><small>{{ l.label or ('#' ~ l.account_id if l.account_id else '') }}</small></td><td>{{ l.level }}</td><td>{{ l.text }}</td></tr>{% endfor %}</table>
 {% endblock %}

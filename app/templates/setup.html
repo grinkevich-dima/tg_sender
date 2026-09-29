@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<article style="max-width:480px;margin:auto">
+<header><strong>Первый запуск: создайте администратора</strong></header>
+<form method="post" action="/setup">
+  <label>Логин<input name="login" required autofocus autocomplete="username"></label>
+  <label>Имя<input name="name" required placeholder="Как вас показывать команде"></label>
+  <label>Пароль<input type="password" name="password" required minlength="8" autocomplete="new-password"></label>
+  <button>Создать</button>
+</form>
+<small class="muted">Админ добавляет менеджеров, видит все аккаунты и кампании и задаёт общие правила.
+Если панель уже была подключена к Telegram, этот аккаунт появится у админа автоматически.</small>
+</article>
+{% endblock %}

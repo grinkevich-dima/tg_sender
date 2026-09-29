@@ -1,216 +1,176 @@
-import json
-import sqlite3
-from contextlib import contextmanager
-from datetime import datetime, timezone
+"""Postgres: пул соединений, короткие помощники для запросов, миграции.
 
-from .config import DB_PATH, DEFAULT_SETTINGS, TZ
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
-
-CREATE TABLE IF NOT EXISTS contacts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tg_user_id INTEGER,
-    username TEXT,
-    phone TEXT,
-    first_name TEXT DEFAULT '',
-    last_name TEXT DEFAULT '',
-    extra TEXT DEFAULT '{}',
-    tags TEXT DEFAULT '',
-    opted_out INTEGER DEFAULT 0,
-    created_at TEXT
-);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_contacts_uid ON contacts(tg_user_id) WHERE tg_user_id IS NOT NULL;
-
-CREATE TABLE IF NOT EXISTS templates (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    body TEXT NOT NULL,
-    created_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS campaigns (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    template_id INTEGER NOT NULL,
-    status TEXT DEFAULT 'draft',      -- draft | running | paused | done
-    created_at TEXT,
-    started_at TEXT,
-    finished_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    campaign_id INTEGER NOT NULL,
-    contact_id INTEGER NOT NULL,
-    status TEXT DEFAULT 'queued',     -- queued | sent | read | replied | failed | skipped
-    text TEXT,
-    tg_message_id INTEGER,
-    peer_id INTEGER,
-    error TEXT,
-    sent_at TEXT,
-    sent_day TEXT,
-    read_at TEXT,
-    replied_at TEXT,
-    UNIQUE(campaign_id, contact_id)
-);
-CREATE INDEX IF NOT EXISTS ix_messages_status ON messages(status);
-CREATE INDEX IF NOT EXISTS ix_messages_peer ON messages(peer_id);
-
--- Списки обращений, загруженные из xlsx (у каждой строки свой готовый текст)
-CREATE TABLE IF NOT EXISTS lists (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    filename TEXT,
-    status TEXT DEFAULT 'draft',      -- draft | running | paused | done
-    created_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS list_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    list_id INTEGER NOT NULL,
-    row_no TEXT,                      -- «Исх. №» из файла
-    kind TEXT,                        -- chat | person | bot | other
-    title TEXT,                       -- «Название / имя в Telegram»
-    first_name TEXT, last_name TEXT,
-    link TEXT,
-    peer_id INTEGER,                  -- marked id (user > 0, группа/канал -100…)
-    username TEXT,
-    topic_id INTEGER,
-    topic_title TEXT,                 -- «Куда»
-    folder TEXT,
-    dialog TEXT,                      -- Диалог есть | Диалога нет | Не применимо (из файла)
-    real_dialog TEXT,                 -- то же по данным Telegram (после «Найти получателей»)
-    address TEXT,                     -- ты | вы | Чат | Не писать
-    plan TEXT,
-    note TEXT,
-    text_no TEXT,
-    text TEXT,
-    src_status TEXT,                  -- «Статус» из файла (полностью)
-    src_group TEXT,                   -- нормализованная группа статуса для фильтра
-    state TEXT DEFAULT 'new',         -- new | queued | sent | read | replied | failed | skipped
-    order_idx INTEGER,
-    error TEXT,
-    tg_message_id INTEGER,
-    sent_at TEXT, sent_day TEXT, read_at TEXT, replied_at TEXT
-);
-CREATE INDEX IF NOT EXISTS ix_li_list ON list_items(list_id, state);
-CREATE INDEX IF NOT EXISTS ix_li_peer ON list_items(peer_id);
-
--- Диалоги аккаунта (заполняется при «Найти получателей»): для поиска чатов по названию
-CREATE TABLE IF NOT EXISTS tg_dialogs (
-    peer_id INTEGER PRIMARY KEY,      -- marked id
-    title TEXT,
-    kind TEXT,                        -- user | group | channel
-    updated_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS event_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts TEXT,
-    level TEXT,
-    text TEXT
-);
+Запросы синхронные (psycopg 3): быстрые локальные запросы не мешают циклу asyncio, а код
+остаётся простым и одинаково работает из обработчиков, воркера и тестов.
 """
+import json
+from contextlib import contextmanager
+from contextvars import ContextVar
+from datetime import datetime, timezone
+from pathlib import Path
 
-_conn: sqlite3.Connection | None = None
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+from psycopg_pool import ConnectionPool
 
+from .config import DATABASE_URL, DEFAULT_SETTINGS, TZ
 
-def conn() -> sqlite3.Connection:
-    global _conn
-    if _conn is None:
-        _conn = sqlite3.connect(DB_PATH, check_same_thread=False, isolation_level=None)
-        _conn.row_factory = sqlite3.Row
-        _conn.execute("PRAGMA journal_mode=WAL")
-        _conn.executescript(SCHEMA)
-        for col, typ in [("list_items", "real_dialog TEXT")]:   # миграции для уже созданных баз
-            try:
-                _conn.execute(f"ALTER TABLE {col} ADD COLUMN {typ}")
-            except sqlite3.OperationalError:
-                pass
-        for k, v in DEFAULT_SETTINGS.items():
-            _conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)", (k, v))
-    return _conn
+MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+
+_pool: ConnectionPool | None = None
+_tx_conn: ContextVar = ContextVar("tx_conn", default=None)
 
 
-def q(sql: str, params=()) -> list[sqlite3.Row]:
-    return conn().execute(sql, params).fetchall()
+def init(url: str = DATABASE_URL) -> None:
+    global _pool
+    if _pool is not None:
+        return
+    _pool = ConnectionPool(url, min_size=1, max_size=10, kwargs={"autocommit": True, "row_factory": dict_row},
+                           open=True)
+    _pool.wait(timeout=30)
+    migrate()
+    for k, v in DEFAULT_SETTINGS.items():
+        ex("INSERT INTO settings(key, value) VALUES (%s, %s) ON CONFLICT DO NOTHING", (k, v))
 
 
-def one(sql: str, params=()):
-    return conn().execute(sql, params).fetchone()
+def close() -> None:
+    global _pool
+    if _pool is not None:
+        _pool.close()
+        _pool = None
 
 
-def ex(sql: str, params=()) -> int:
-    cur = conn().execute(sql, params)
-    return cur.lastrowid
+@contextmanager
+def _conn():
+    c = _tx_conn.get()
+    if c is not None:
+        yield c
+        return
+    if _pool is None:
+        init()
+    with _pool.connection() as c:
+        yield c
+
+
+def q(sql: str, params=()) -> list[dict]:
+    with _conn() as c:
+        return c.execute(sql, params).fetchall()
+
+
+def one(sql: str, params=()) -> dict | None:
+    with _conn() as c:
+        return c.execute(sql, params).fetchone()
+
+
+def val(sql: str, params=()):
+    row = one(sql, params)
+    return next(iter(row.values())) if row else None
+
+
+def ex(sql: str, params=()):
+    """INSERT/UPDATE/DELETE. Если в запросе RETURNING — вернёт первое значение первой строки."""
+    with _conn() as c:
+        cur = c.execute(sql, params)
+        if cur.description:
+            row = cur.fetchone()
+            return next(iter(row.values())) if row else None
+        return None
 
 
 def changed(sql: str, params=()) -> int:
     """UPDATE/DELETE → сколько строк затронуто."""
-    return conn().execute(sql, params).rowcount
+    with _conn() as c:
+        return c.execute(sql, params).rowcount
 
 
 @contextmanager
 def tx():
-    """Одна транзакция на пачку записей: импорт тысяч строк без fsync на каждую."""
-    c = conn()
-    c.execute("BEGIN")
-    try:
-        yield
-    except BaseException:
-        c.execute("ROLLBACK")
-        raise
-    c.execute("COMMIT")
+    """Одна транзакция: все q/one/ex внутри блока идут через одно соединение.
+    Внутри не должно быть await — иначе другие задачи asyncio попадут в эту транзакцию.
+    Вложенный tx — точка сохранения: ошибка внутри откатывает только его."""
+    outer = _tx_conn.get()
+    if outer is not None:
+        with outer.transaction():
+            yield
+        return
+    if _pool is None:
+        init()
+    with _pool.connection() as c:
+        with c.transaction():
+            token = _tx_conn.set(c)
+            try:
+                yield
+            finally:
+                _tx_conn.reset(token)
 
 
-def now_utc() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+def jsonb(value) -> Jsonb:
+    return Jsonb(value)
+
+
+# ---- миграции ----
+def migrate() -> list[str]:
+    """Применяет app/migrations/NNN_*.sql по порядку, каждую в своей транзакции."""
+    applied = []
+    with _pool.connection() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, applied_at timestamptz DEFAULT now())")
+        done = {r["version"] for r in c.execute("SELECT version FROM schema_migrations").fetchall()}
+        for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+            if path.stem in done:
+                continue
+            with c.transaction():
+                c.execute(path.read_text())
+                c.execute("INSERT INTO schema_migrations(version) VALUES (%s)", (path.stem,))
+            applied.append(path.stem)
+    return applied
+
+
+# ---- время ----
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def now_local() -> datetime:
     return datetime.now(TZ)
 
 
-def today() -> str:
-    return now_local().date().isoformat()
+def today():
+    return now_local().date()
 
 
-# ---- settings ----
+# ---- общие настройки ----
 def get_setting(key: str) -> str:
-    row = one("SELECT value FROM settings WHERE key=?", (key,))
-    return row["value"] if row else DEFAULT_SETTINGS.get(key, "")
+    v = val("SELECT value FROM settings WHERE key=%s", (key,))
+    return v if v is not None else DEFAULT_SETTINGS.get(key, "")
 
 
 def set_setting(key: str, value: str) -> None:
-    ex("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    ex("INSERT INTO settings(key, value) VALUES (%s, %s) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
        (key, str(value)))
 
 
-def all_settings() -> dict:
-    return {r["key"]: r["value"] for r in q("SELECT key, value FROM settings")}
+# ---- журнал ----
+def log(text: str, level: str = "info", account_id: int | None = None) -> None:
+    ex("INSERT INTO event_log(level, text, account_id) VALUES (%s, %s, %s)", (level, text, account_id))
+    print(f"[{level}]{f' acc#{account_id}' if account_id else ''} {text}", flush=True)
 
 
-# ---- log ----
-def log(text: str, level: str = "info") -> None:
-    ex("INSERT INTO event_log(ts, level, text) VALUES (?, ?, ?)", (now_local().isoformat(timespec="seconds"), level, text))
-    print(f"[{level}] {text}", flush=True)
-
-
-def contact_vars(c: sqlite3.Row) -> dict:
-    extra = {}
-    try:
-        extra = json.loads(c["extra"] or "{}")
-    except Exception:
-        pass
-    first = c["first_name"] or ""
-    last = c["last_name"] or ""
+def lead_vars(lead: dict) -> dict:
+    """Переменные шаблона для лида: имя, username, телефон + колонки из импорта (extra)."""
+    extra = lead.get("extra") or {}
+    if isinstance(extra, str):
+        try:
+            extra = json.loads(extra)
+        except ValueError:
+            extra = {}
+    first = lead.get("first_name") or ""
+    last = lead.get("last_name") or ""
     base = {
         "first_name": first,
         "last_name": last,
-        "name": (first + " " + last).strip() or (c["username"] or ""),
-        "username": c["username"] or "",
-        "phone": c["phone"] or "",
+        "name": (first + " " + last).strip() or (lead.get("username") or lead.get("title") or ""),
+        "username": lead.get("username") or "",
+        "phone": lead.get("phone") or "",
     }
     base.update({k: str(v) for k, v in extra.items()})
     return base

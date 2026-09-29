@@ -27,6 +27,11 @@
   .fbar .fsearch { width:auto; flex:1 1 180px; margin:0; padding:.35rem .7rem; font-size:.85em; height:auto; }
   details.filters > summary { margin-bottom:.3rem; }
   .b-new{background:#f1f5f9;color:#334155} .b-draft{background:#f1f5f9;color:#334155}
+  .b-sending{background:#e0f2fe;color:#075985} .b-active{background:#dcfce7;color:#14532d} .b-logged_out{background:#fee2e2;color:#7f1d1d}
+  nav.top ul li { padding-top:.3rem; padding-bottom:.3rem; }
+  nav.top form { display:inline; margin:0; } nav.top form button { padding:.2rem .6rem; font-size:.8em; width:auto; margin:0; }
+  .acc-chips label { display:inline-flex; gap:.3rem; margin-right:1rem; }
+  .reply { border-left: 3px solid #86efac; padding-left:.6rem; margin:.4rem 0; }
   table { font-size: .9em; }
   .row-actions form { display:inline; }
   .row-actions button, .row-actions a[role=button] { padding: .3rem .8rem; font-size: .85em; margin:0 .3rem .3rem 0; width:auto; }
@@ -38,16 +43,19 @@
 <body>
 <nav class="container top">
   <ul><li><strong>📨 TG Sender</strong></li></ul>
+  {% if user %}
   <ul>
     <li><a href="/">Дашборд</a></li>
-    <li><a href="/contacts">Контакты</a></li>
-    <li><a href="/templates">Шаблоны</a></li>
     <li><a href="/campaigns">Кампании</a></li>
-    <li><a href="/lists">Списки xlsx</a></li>
-    <li><a href="/settings">Прогрев и лимиты</a></li>
+    <li><a href="/leads">Лиды</a></li>
+    <li><a href="/templates">Шаблоны</a></li>
+    <li><a href="/accounts">Аккаунты</a></li>
+    {% if is_admin %}<li><a href="/users">Команда</a></li><li><a href="/settings">Правила</a></li>{% endif %}
     <li><a href="/log">Журнал</a></li>
-    <li><a href="/auth">{% if authorized %}👤 {{ me }}{% else %}🔑 Войти{% endif %}</a></li>
+    <li><a href="/me">👤 {{ user.name }}</a></li>
+    <li><form method="post" action="/logout"><button class="outline secondary">Выйти</button></form></li>
   </ul>
+  {% endif %}
 </nav>
 <main class="container">
   {% if flash and flash.msg %}<div class="flash ok">{{ flash.msg }}</div>{% endif %}

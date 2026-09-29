@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<article>
+<header><strong>Добавить в команду</strong></header>
+<form method="post" action="/users/create">
+  <div class="grid">
+    <input name="login" placeholder="Логин" required autocomplete="off">
+    <input name="name" placeholder="Имя" required>
+    <input type="password" name="password" placeholder="Пароль (от 8 символов)" required minlength="8" autocomplete="new-password">
+    <select name="role"><option value="manager">Менеджер</option><option value="admin">Админ</option></select>
+  </div>
+  <button>Добавить</button>
+</form>
+<small class="muted">Менеджер подключает свои аккаунты Telegram и работает только с ними и со своими кампаниями.
+Админ видит всё и меняет общие правила.</small>
+</article>
+<table>
+<thead><tr><th>Имя</th><th>Логин</th><th>Роль</th><th>Аккаунтов</th><th>Статус</th><th></th></tr></thead>
+{% for u in rows %}
+<tr {% if not u.active %}style="opacity:.5"{% endif %}>
+  <td>{{ u.name }}</td><td>{{ u.login }}</td><td>{{ ROLES[u.role] }}</td><td>{{ u.accounts }}</td>
+  <td>{{ 'активен' if u.active else 'отключён' }}</td>
+  <td class="row-actions">
+    {% if u.id != user.id %}<form method="post" action="/users/{{ u.id }}/toggle"><button class="outline secondary">{{ 'отключить' if u.active else 'включить' }}</button></form>{% endif %}
+    <details style="display:inline-block"><summary class="muted" style="font-size:.85em">сменить пароль</summary>
+      <form method="post" action="/users/{{ u.id }}/password"><input type="password" name="password" minlength="8" required placeholder="Новый пароль"><button class="outline">Сохранить</button></form>
+    </details>
+  </td>
+</tr>
+{% endfor %}
+</table>
+{% endblock %}

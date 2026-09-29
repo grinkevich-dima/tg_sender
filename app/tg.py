@@ -1,69 +1,112 @@
-"""Работа с личным аккаунтом Telegram (Telethon, MTProto)."""
+"""Личные аккаунты Telegram команды (Telethon, MTProto): по клиенту на аккаунт."""
 import asyncio
-import re
 from typing import Awaitable, Callable
 
-from telethon import TelegramClient, events, errors
+from psycopg.errors import UniqueViolation
+from telethon import TelegramClient, errors, events, utils
 from telethon.tl.functions.contacts import GetContactsRequest
 from telethon.tl.types import User
 
-from . import db
-from .config import API_HASH, API_ID, SESSION_PATH
+from . import db, leads
+from .config import API_HASH, API_ID, SESSIONS_DIR
 
-# Точка расширения: сюда позже подключится ИИ-автоответчик (Claude).
-# Каждый хук получает (event, contact_row | None).
-IncomingHook = Callable[[events.NewMessage.Event, object], Awaitable[None]]
+# Точка расширения: сюда подключится ИИ-разбор ответов.
+# Каждый хук получает (account_client, event, lead_row | None).
+IncomingHook = Callable[["AccountClient", events.NewMessage.Event, object], Awaitable[None]]
 incoming_hooks: list[IncomingHook] = []
 
+CODE_WHERE = {"App": "в приложение Telegram (чат «Telegram»)", "Sms": "по SMS", "Call": "звонком",
+              "FlashCall": "flash-звонком", "MissedCall": "пропущенным звонком (последние цифры номера)",
+              "FragmentSms": "через Fragment", "EmailCode": "на e-mail",
+              "SetUpEmailRequired": "— Telegram требует привязать e-mail"}
 
-class TgManager:
-    def __init__(self):
+
+def configured() -> bool:
+    return bool(API_ID and API_HASH)
+
+
+class DuplicateAccount(Exception):
+    """Этот Telegram-аккаунт уже подключён в панели другой записью."""
+
+
+class AccountClient:
+    def __init__(self, account_id: int):
+        self.id = account_id
         self.client: TelegramClient | None = None
+        self.me: User | None = None
+        self.lock = asyncio.Lock()        # одна операция Telegram за раз на аккаунт
         self.phone: str | None = None
         self.phone_code_hash: str | None = None
-        self.me: User | None = None
-        self.lock = asyncio.Lock()
+        self.qr = None
+        self.qr_status = "none"
+        self.qr_version = 0
+        self._qr_task: asyncio.Task | None = None
 
+    # ---------- подключение ----------
     @property
-    def configured(self) -> bool:
-        return bool(API_ID and API_HASH)
+    def session_path(self):
+        return SESSIONS_DIR / f"acc_{self.id}"   # Telethon добавит .session
 
     async def start(self):
-        if not self.configured:
-            db.log("TG_API_ID / TG_API_HASH не заданы в .env — авторизация невозможна", "error")
+        if not configured():
             return
         self.client = TelegramClient(
-            str(SESSION_PATH), API_ID, API_HASH,
-            device_model="TG Sender Panel", system_version="1.0", app_version="1.0",
+            str(self.session_path), API_ID, API_HASH,
+            device_model="TG Sender Panel", system_version="1.0", app_version="2.0",
             flood_sleep_threshold=0,  # FloodWait обрабатываем сами
         )
         self._register_handlers()
         await self.client.connect()
         if await self.client.is_user_authorized():
-            self.me = await self.client.get_me()
-            db.log(f"Аккаунт подключён: {self.display_me()}")
+            try:
+                await self._on_login("Аккаунт подключён")
+            except DuplicateAccount:
+                pass
 
     async def stop(self):
+        if self._qr_task and not self._qr_task.done():
+            self._qr_task.cancel()
         if self.client:
             await self.client.disconnect()
 
-    async def authorized(self) -> bool:
+    @property
+    def authorized(self) -> bool:
         return bool(self.client and self.client.is_connected() and self.me)
 
-    def display_me(self) -> str:
+    def display(self) -> str:
         if not self.me:
             return "—"
         name = " ".join(filter(None, [self.me.first_name, self.me.last_name]))
         un = f"@{self.me.username}" if self.me.username else ""
-        return f"{name} {un} (+{self.me.phone})".strip()
+        return f"{name} {un}".strip()
 
-    # ---------- авторизация ----------
-    async def send_code(self, phone: str):
+    async def _ensure_connected(self):
+        if self.client is None:
+            await self.start()
+        if self.client is None:
+            raise RuntimeError("Не заданы TG_API_ID / TG_API_HASH в .env")
         if not self.client.is_connected():
             await self.client.connect()
+
+    async def _on_login(self, what: str):
+        me = await self.client.get_me()
+        other = db.one("SELECT id FROM tg_accounts WHERE tg_user_id=%s AND id!=%s", (me.id, self.id))
+        if other:
+            db.log(f"Аккаунт {me.first_name} (+{me.phone}) уже подключён как #{other['id']} — вход отменён", "error", self.id)
+            await self.client.log_out()
+            self.me = None
+            raise DuplicateAccount(f"Этот Telegram-аккаунт уже подключён в панели (#{other['id']})")
+        self.me = me
+        db.ex("""UPDATE tg_accounts SET tg_user_id=%s, username=%s, first_name=%s, last_name=%s, phone=%s,
+                 status=CASE WHEN status IN ('new','logged_out') THEN 'active' ELSE status END WHERE id=%s""",
+              (me.id, me.username, me.first_name, me.last_name, f"+{me.phone}" if me.phone else None, self.id))
+        db.log(f"{what}: {self.display()}", account_id=self.id)
+
+    # ---------- вход по коду ----------
+    async def send_code(self, phone: str) -> str:
+        await self._ensure_connected()
         # Telethon кэширует hash прошлого запроса и тогда шлёт ResendCode, который
         # быстро упирается в SEND_CODE_UNAVAILABLE. Отменяем старый и просим новый код.
-        from telethon import utils
         from telethon.tl.functions.auth import CancelCodeRequest
         key = utils.parse_phone(phone)
         old_hash = self.client._phone_code_hash.pop(key, None)
@@ -76,19 +119,30 @@ class TgManager:
         self.phone = phone
         self.phone_code_hash = res.phone_code_hash
         kind = type(res.type).__name__.replace("SentCodeType", "")
-        where = {"App": "в приложение Telegram (чат «Telegram»)", "Sms": "по SMS", "Call": "звонком",
-                 "FlashCall": "flash-звонком", "MissedCall": "пропущенным звонком (последние цифры номера)",
-                 "FragmentSms": "через Fragment", "EmailCode": "на e-mail", "SetUpEmailRequired": "— Telegram требует привязать e-mail"
-                 }.get(kind, kind)
-        db.log(f"Код входа отправлен {where}")
+        where = CODE_WHERE.get(kind, kind)
+        db.log(f"Код входа отправлен {where}", account_id=self.id)
         return where
+
+    async def sign_in_code(self, code: str) -> str:
+        """Возвращает 'ok' или 'password' (нужен пароль 2FA)."""
+        await self._ensure_connected()
+        try:
+            await self.client.sign_in(phone=self.phone, code=code.strip(), phone_code_hash=self.phone_code_hash)
+        except errors.SessionPasswordNeededError:
+            return "password"
+        await self._on_login("Вход выполнен")
+        return "ok"
+
+    async def sign_in_password(self, password: str):
+        await self._ensure_connected()
+        await self.client.sign_in(password=password)
+        await self._on_login("Вход выполнен (2FA)")
 
     # ---------- вход по QR-коду ----------
     # Токен QR живёт ~30 сек, поэтому пересоздаём его, пока пользователь не отсканирует.
     async def qr_start(self) -> str:
-        if not self.client.is_connected():
-            await self.client.connect()
-        if getattr(self, "_qr_task", None) and not self._qr_task.done():
+        await self._ensure_connected()
+        if self._qr_task and not self._qr_task.done():
             self._qr_task.cancel()
         self.qr = await self.client.qr_login()
         self.qr_status = "waiting"
@@ -110,82 +164,43 @@ class TgManager:
                         return
                     await self.qr.recreate()
                     self.qr_version += 1
-            self.me = await self.client.get_me()
+            await self._on_login("Вход по QR выполнен")
             self.qr_status = "ok"
-            db.log(f"Вход по QR выполнен: {self.display_me()}")
         except errors.SessionPasswordNeededError:
             self.qr_status = "password"
         except asyncio.CancelledError:
             pass
+        except DuplicateAccount as e:
+            self.qr_status = f"error: {e}"
         except Exception as e:
             self.qr_status = f"error: {e}"
-            db.log(f"Ошибка входа по QR: {type(e).__name__}: {e}", "error")
-
-    async def sign_in_code(self, code: str) -> str:
-        """Возвращает 'ok' или 'password' (нужен пароль 2FA)."""
-        try:
-            await self.client.sign_in(phone=self.phone, code=code.strip(), phone_code_hash=self.phone_code_hash)
-        except errors.SessionPasswordNeededError:
-            return "password"
-        self.me = await self.client.get_me()
-        db.log(f"Вход выполнен: {self.display_me()}")
-        return "ok"
-
-    async def sign_in_password(self, password: str):
-        await self.client.sign_in(password=password)
-        self.me = await self.client.get_me()
-        db.log(f"Вход выполнен (2FA): {self.display_me()}")
+            db.log(f"Ошибка входа по QR: {type(e).__name__}: {e}", "error", self.id)
 
     async def logout(self):
-        if self.client:
+        if self.client and self.me:
             await self.client.log_out()
+        await self.stop()
         self.me = None
-        db.log("Выход из аккаунта", "warn")
-        # после log_out клиент нужно пересоздать
-        await self.start()
+        self.client = None
+        db.ex("UPDATE tg_accounts SET status='logged_out' WHERE id=%s", (self.id,))
+        db.log("Выход из аккаунта", "warn", self.id)
 
-    # ---------- контакты ----------
+    # ---------- импорт лидов ----------
     async def import_contacts(self, tag: str = "") -> int:
-        res = await self.client(GetContactsRequest(hash=0))
-        return self._save_users([u for u in res.users if not u.bot and not u.deleted], tag)
+        async with self.lock:
+            res = await self.client(GetContactsRequest(hash=0))
+        return leads.import_tg_users([u for u in res.users if not u.bot and not u.deleted], tag, self.id)
 
     async def import_dialogs(self, tag: str = "", limit: int = 500) -> int:
         users = []
-        async for d in self.client.iter_dialogs(limit=limit):
-            e = d.entity
-            if isinstance(e, User) and not e.bot and not e.deleted and not e.is_self and e.id != 777000:
-                users.append(e)
-        return self._save_users(users, tag)
+        async with self.lock:
+            async for d in self.client.iter_dialogs(limit=limit):
+                e = d.entity
+                if isinstance(e, User) and not e.bot and not e.deleted and not e.is_self and e.id != 777000:
+                    users.append(e)
+        return leads.import_tg_users(users, tag, self.id)
 
-    def _save_users(self, users: list[User], tag: str) -> int:
-        n = 0
-        for u in users:
-            existing = db.one("SELECT id, tags FROM contacts WHERE tg_user_id=?", (u.id,))
-            if existing:
-                tags = _merge_tags(existing["tags"], tag)
-                db.ex("UPDATE contacts SET username=?, phone=COALESCE(?, phone), first_name=?, last_name=?, tags=? WHERE id=?",
-                      (u.username, u.phone, u.first_name or "", u.last_name or "", tags, existing["id"]))
-            else:
-                db.ex("INSERT INTO contacts(tg_user_id, username, phone, first_name, last_name, tags, created_at) VALUES (?,?,?,?,?,?,?)",
-                      (u.id, u.username, u.phone, u.first_name or "", u.last_name or "", tag.strip(), db.now_utc()))
-                n += 1
-        return n
-
-    async def resolve(self, contact):
-        """Находит получателя: сначала по id из кэша сессии, потом по username/телефону."""
-        if contact["tg_user_id"]:
-            try:
-                return await self.client.get_input_entity(contact["tg_user_id"])
-            except (ValueError, TypeError):
-                pass
-        key = contact["username"] or contact["phone"]
-        if not key:
-            raise ValueError("нет username/телефона/ID")
-        entity = await self.client.get_entity(key)
-        db.ex("UPDATE contacts SET tg_user_id=? WHERE id=?", (entity.id, contact["id"]))
-        return entity
-
-    # ---------- получатели из списков xlsx ----------
+    # ---------- поиск адресата ----------
     @staticmethod
     def _alt_ids(pid: int) -> list[int]:
         """Варианты записи ID группы: web.telegram.org/a даёт -100…, /k и старые группы — просто -…"""
@@ -197,151 +212,147 @@ class TgManager:
             out.append(int("-100" + s[1:]))         # супергруппа, записанная без «-100»
         return out
 
-    async def resolve_item(self, item):
-        if item["peer_id"]:
-            for pid in self._alt_ids(item["peer_id"]):
+    def _set_lead_tg_id(self, lead_id: int, tg_id: int) -> None:
+        try:
+            with db.tx():
+                db.ex("UPDATE leads SET tg_id=%s WHERE id=%s", (tg_id, lead_id))
+        except UniqueViolation:
+            pass     # этот ID уже у другого лида — оставляем как есть
+
+    async def resolve(self, lead: dict):
+        """Находит адресата. Вызывать под self.lock."""
+        if lead["tg_id"]:
+            ids = self._alt_ids(lead["tg_id"]) if lead["kind"] == "chat" else [lead["tg_id"]]
+            for pid in ids:
                 try:
                     ent = await self.client.get_input_entity(pid)
-                    if pid != item["peer_id"]:
-                        db.ex("UPDATE list_items SET peer_id=? WHERE id=?", (pid, item["id"]))
+                    if pid != lead["tg_id"]:
+                        self._set_lead_tg_id(lead["id"], pid)
                     return ent
                 except (ValueError, TypeError):
                     pass
-        if item["username"]:
-            return await self.client.get_entity(item["username"])
-        if item["kind"] == "chat" and item["title"]:
-            want = item["title"].strip().casefold()   # SQLite lower() не умеет кириллицу — сравниваем в Python
-            row = next((r for r in db.q("SELECT peer_id, title FROM tg_dialogs WHERE kind!='user'")
-                        if (r["title"] or "").strip().casefold() == want), None)
+        if lead["username"]:
+            return await self.client.get_entity(lead["username"])
+        if lead["kind"] != "chat" and lead["phone"]:
+            return await self.client.get_entity(lead["phone"])
+        if lead["kind"] == "chat" and lead["title"]:
+            row = db.one("""SELECT peer_id FROM tg_dialogs WHERE account_id=%s AND kind!='user'
+                            AND lower(trim(title))=lower(trim(%s)) LIMIT 1""", (self.id, lead["title"]))
             if row:
                 ent = await self.client.get_input_entity(row["peer_id"])
-                db.ex("UPDATE list_items SET peer_id=? WHERE id=?", (row["peer_id"], item["id"]))
-                db.log(f"Чат «{item['title']}» найден по названию (ID {row['peer_id']} вместо {item['peer_id']})", "warn")
+                self._set_lead_tg_id(lead["id"], row["peer_id"])
+                db.log(f"Чат «{lead['title']}» найден по названию (ID {row['peer_id']} вместо {lead['tg_id']})",
+                       "warn", self.id)
                 return ent
-        if item["kind"] == "chat":
-            raise ValueError("чат не найден среди ваших диалогов: проверьте ссылку и что вы состоите в чате "
+        if lead["kind"] == "chat":
+            raise ValueError("чат не найден среди диалогов аккаунта: проверьте ссылку и что аккаунт состоит в чате "
                              "(для обновления списка диалогов нажмите «Найти получателей»)")
-        if item["peer_id"]:
-            raise ValueError("ID нет в кэше сессии. Нажмите «Найти получателей» на странице списка; "
-                             "если не поможет — у вас нет общего диалога/чата с этим человеком")
-        raise ValueError("в строке нет ссылки на чат/человека")
+        if lead["tg_id"]:
+            raise ValueError("ID нет в кэше сессии. Нажмите «Найти получателей» на странице кампании; "
+                             "если не поможет — у аккаунта нет общего диалога/чата с этим человеком")
+        raise ValueError("нет ссылки на чат/человека")
 
-    prepare_state: dict = {}
-
-    @property
-    def preparing(self) -> bool:
-        return any(st.get("running") for st in self.prepare_state.values())
-
-    async def prepare_list(self, list_id: int):
-        """Прогревает кэш сессии: все диалоги + участники чатов из списка, чтобы найти людей по ID."""
-        st = self.prepare_state[list_id] = {"running": True, "step": "ожидание отправки", "found": 0, "total": 0}
-        # Держим tg.lock всё время поиска: иначе повышенный flood_sleep_threshold действует и на отправку —
-        # Telethon молча ждал бы FloodWait до 5 мин вместо нашей паузы. Воркер на это время не отправляет.
+    # ---------- найти получателей ----------
+    async def prepare(self, campaign_id: int, st: dict):
+        """Прогревает кэш сессии: все диалоги + участники чатов кампании, чтобы найти людей по ID.
+        Держит self.lock: повышенный flood_sleep_threshold не должен действовать на отправку."""
         async with self.lock:
-            await self._prepare_list(list_id, st)
+            old_threshold = self.client.flood_sleep_threshold
+            # Загрузка всех диалогов — много запросов подряд, Telegram отвечает FloodWait на десятки секунд.
+            # На время поиска разрешаем Telethon самому выжидать такие паузы (до 5 мин).
+            self.client.flood_sleep_threshold = 300
+            try:
+                await self._prepare(campaign_id, st)
+            finally:
+                self.client.flood_sleep_threshold = old_threshold
 
-    async def _prepare_list(self, list_id: int, st: dict):
-        st["step"] = "диалоги"
-        # Загрузка всех диалогов — много запросов подряд, Telegram отвечает FloodWait на десятки секунд.
-        # На время поиска разрешаем Telethon самому выжидать такие паузы (до 5 мин), потом возвращаем 0.
-        old_threshold = self.client.flood_sleep_threshold
-        self.client.flood_sleep_threshold = 300
-        try:
-            n = 0
-            private = set()   # собеседники, с которыми есть личная переписка
-            async for d in self.client.iter_dialogs(limit=None):
-                n += 1
-                kind = "user" if d.is_user else ("channel" if d.is_channel and not d.is_group else "group")
-                db.ex("INSERT OR REPLACE INTO tg_dialogs(peer_id, title, kind, updated_at) VALUES (?,?,?,?)",
-                      (d.id, d.name or "", kind, db.now_utc()))
-                if d.is_user and d.message is not None:
-                    private.add(d.entity.id)
-                if n % 100 == 0:
-                    st["step"] = f"диалоги: {n} (Telegram может делать паузы, это нормально)"
-            st["step"] = f"диалоги: {n}"
-            checked = mismatch = 0
-            for it in db.q("SELECT id, peer_id, dialog FROM list_items WHERE list_id=? AND kind!='chat' AND peer_id > 0",
-                           (list_id,)):
-                real = "Диалог есть" if it["peer_id"] in private else "Диалога нет"
-                db.ex("UPDATE list_items SET real_dialog=? WHERE id=?", (real, it["id"]))
-                checked += 1
-                if (it["dialog"] or "") in ("Диалог есть", "Диалога нет") and it["dialog"] != real:
-                    mismatch += 1
-            st["checked"], st["mismatch"] = checked, mismatch
-            db.log(f"Сверка диалогов списка #{list_id}: проверено {checked}, расхождений с файлом {mismatch}")
-            people = db.q("SELECT id, peer_id FROM list_items WHERE list_id=? AND kind!='chat' AND peer_id IS NOT NULL",
-                          (list_id,))
-            st["total"] = len(people)
+    async def _prepare(self, campaign_id: int, st: dict):
+        who = self.display()
+        n = 0
+        private = set()
+        async for d in self.client.iter_dialogs(limit=None):
+            n += 1
+            kind = "user" if d.is_user else ("channel" if d.is_channel and not d.is_group else "group")
+            has_private = bool(d.is_user and d.message is not None)
+            if has_private:
+                private.add(d.entity.id)
+            db.ex("""INSERT INTO tg_dialogs(account_id, peer_id, title, kind, has_private, updated_at)
+                     VALUES (%s,%s,%s,%s,%s, now()) ON CONFLICT (account_id, peer_id) DO UPDATE
+                     SET title=excluded.title, kind=excluded.kind, has_private=excluded.has_private, updated_at=now()""",
+                  (self.id, d.id, d.name or "", kind, has_private))
+            if n % 100 == 0:
+                st["step"] = f"{who}: диалоги {n} (Telegram может делать паузы, это нормально)"
+        st["step"] = f"{who}: диалоги {n}"
 
-            def unresolved():
-                out = []
-                for p in people:
-                    try:
-                        self.client.session.get_input_entity(p["peer_id"])
-                    except (ValueError, TypeError):
-                        out.append(p)
-                return out
-
-            missing = unresolved()
-            chats = db.q("SELECT DISTINCT peer_id, title FROM list_items WHERE list_id=? AND kind='chat' AND peer_id IS NOT NULL",
-                         (list_id,))
-            for ch in chats:
-                if not missing:
-                    break
-                st["step"] = f"участники чата «{ch['title']}»"
-                try:
-                    async for _ in self.client.iter_participants(ch["peer_id"], limit=10000):
-                        pass
-                    await asyncio.sleep(3)
-                except (errors.RPCError, ValueError, TypeError) as e:
-                    db.log(f"Участники «{ch['title']}» недоступны: {type(e).__name__}", "warn")
-                await asyncio.sleep(1)
-                missing = unresolved()
-            st["found"] = st["total"] - len(missing)
-            st["step"] = "готово"
-            db.log(f"Поиск получателей: найдено {st['found']} из {st['total']} людей списка #{list_id}")
-        except Exception as e:
-            if isinstance(e, errors.FloodWaitError):
-                st["step"] = f"Telegram попросил подождать {e.seconds} сек — запустите поиск ещё раз чуть позже"
+        people = db.q("""SELECT cl.id, cl.account_id, l.tg_id FROM campaign_leads cl JOIN leads l ON l.id=cl.lead_id
+                         WHERE cl.campaign_id=%s AND l.kind!='chat' AND l.tg_id > 0
+                           AND (cl.account_id=%s OR cl.account_id IS NULL)""", (campaign_id, self.id))
+        for p in people:
+            if p["account_id"] == self.id or p["tg_id"] in private:
+                # у закреплённых — по этому аккаунту; у свободных «Диалог есть», если он есть хоть у одного
+                db.ex("UPDATE campaign_leads SET real_dialog=%s WHERE id=%s",
+                      ("Диалог есть" if p["tg_id"] in private else "Диалога нет", p["id"]))
             else:
-                st["step"] = f"ошибка: {e}"
-            db.log(f"Поиск получателей: {type(e).__name__}: {e}", "error")
-        finally:
-            self.client.flood_sleep_threshold = old_threshold
-            st["running"] = False
+                db.ex("UPDATE campaign_leads SET real_dialog=COALESCE(real_dialog, 'Диалога нет') WHERE id=%s", (p["id"],))
 
+        def unresolved():
+            out = []
+            for p in people:
+                try:
+                    self.client.session.get_input_entity(p["tg_id"])
+                except (ValueError, TypeError):
+                    out.append(p)
+            return out
+
+        missing = unresolved()
+        chats = db.q("""SELECT DISTINCT l.tg_id, l.title FROM campaign_leads cl JOIN leads l ON l.id=cl.lead_id
+                        WHERE cl.campaign_id=%s AND l.kind='chat' AND l.tg_id IS NOT NULL""", (campaign_id,))
+        for ch in chats:
+            if not missing:
+                break
+            st["step"] = f"{who}: участники чата «{ch['title']}»"
+            try:
+                async for _ in self.client.iter_participants(ch["tg_id"], limit=10000):
+                    pass
+                await asyncio.sleep(3)
+            except (errors.RPCError, ValueError, TypeError) as e:
+                db.log(f"Участники «{ch['title']}» недоступны: {type(e).__name__}", "warn", self.id)
+            await asyncio.sleep(1)
+            missing = unresolved()
+        st["found"] += len(people) - len(missing)
+        st["total"] += len(people)
+
+    # ---------- прочтения ----------
     async def refresh_reads(self) -> int:
         """Досинхронизация прочтений (если панель была выключена, когда их читали)."""
         from telethon.tl.functions.messages import GetPeerDialogsRequest
         from telethon.tl.types import InputDialogPeer
 
-        rows = db.q("""SELECT DISTINCT peer_id FROM messages WHERE status='sent' AND peer_id IS NOT NULL
-                       UNION SELECT DISTINCT peer_id FROM list_items WHERE state='sent' AND peer_id > 0""")
+        ids = [r["tg_id"] for r in db.q("""SELECT DISTINCT l.tg_id FROM campaign_leads cl JOIN leads l ON l.id=cl.lead_id
+                                           WHERE cl.account_id=%s AND cl.state='sent' AND l.tg_id > 0""", (self.id,))]
         updated = 0
-        ids = [r["peer_id"] for r in rows]
         for i in range(0, len(ids), 50):
-            peers = []
-            for pid in ids[i:i + 50]:
-                try:
-                    peers.append(InputDialogPeer(await self.client.get_input_entity(pid)))
-                except (ValueError, TypeError):
+            async with self.lock:
+                peers = []
+                for pid in ids[i:i + 50]:
+                    try:
+                        peers.append(InputDialogPeer(await self.client.get_input_entity(pid)))
+                    except (ValueError, TypeError):
+                        continue
+                if not peers:
                     continue
-            if not peers:
-                continue
-            res = await self.client(GetPeerDialogsRequest(peers=peers))
+                res = await self.client(GetPeerDialogsRequest(peers=peers))
             for d in res.dialogs:
                 pid = getattr(d.peer, "user_id", None)
                 if pid:
-                    before = db.one("SELECT total_changes() AS n")["n"]
-                    db.ex("""UPDATE messages SET status='read', read_at=?
-                             WHERE peer_id=? AND status='sent' AND tg_message_id<=?""",
-                          (db.now_utc(), pid, d.read_outbox_max_id))
-                    db.ex("""UPDATE list_items SET state='read', read_at=?
-                             WHERE peer_id=? AND state='sent' AND tg_message_id<=?""",
-                          (db.now_utc(), pid, d.read_outbox_max_id))
-                    updated += db.one("SELECT total_changes() AS n")["n"] - before
+                    updated += self._mark_read(pid, d.read_outbox_max_id)
             await asyncio.sleep(1)
         return updated
+
+    def _mark_read(self, peer_id: int, max_id: int) -> int:
+        return db.changed("""UPDATE campaign_leads cl SET state='read', read_at=now() FROM leads l
+                             WHERE l.id=cl.lead_id AND cl.account_id=%s AND l.tg_id=%s AND cl.state='sent'
+                               AND cl.tg_message_id <= %s""", (self.id, peer_id, max_id))
 
     # ---------- входящие события ----------
     def _register_handlers(self):
@@ -349,54 +360,94 @@ class TgManager:
 
         @c.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
         async def on_incoming(event):
-            uid = event.sender_id
-            db.ex("""UPDATE list_items SET state='replied', replied_at=?
-                     WHERE peer_id=? AND state IN ('sent','read')""", (db.now_utc(), uid))
-            contact = db.one("SELECT * FROM contacts WHERE tg_user_id=?", (uid,))
-            if contact:
-                db.ex("""UPDATE messages SET status='replied', replied_at=?
-                         WHERE contact_id=? AND status IN ('sent','read')""", (db.now_utc(), contact["id"]))
-            if is_stop_message(event.raw_text, db.get_setting("stop_words")):
-                if contact:
-                    db.ex("UPDATE contacts SET opted_out=1 WHERE id=?", (contact["id"],))
-                    db.ex("UPDATE messages SET status='skipped', error='отписался' WHERE contact_id=? AND status='queued'",
-                          (contact["id"],))
-                else:
-                    db.ex("INSERT INTO contacts(tg_user_id, opted_out, created_at) VALUES (?,1,?)", (uid, db.now_utc()))
-                    contact = db.one("SELECT * FROM contacts WHERE tg_user_id=?", (uid,))
-                db.ex("UPDATE list_items SET state='skipped', error='отписался' WHERE peer_id=? AND state='queued'", (uid,))
-                db.log(f"Контакт #{contact['id']} отписался: «{(event.raw_text or '')[:50]}»", "warn")
-            for hook in incoming_hooks:
-                try:
-                    await hook(event, contact)
-                except Exception as ex:  # хук не должен ронять приём
-                    db.log(f"Ошибка хука входящих: {ex}", "error")
+            await self.handle_incoming(event.sender_id, event.raw_text, event.id, event)
 
         @c.on(events.MessageRead(inbox=False))
         async def on_read(event):
             # собеседник прочитал наши сообщения до max_id включительно
-            db.ex("""UPDATE messages SET status='read', read_at=?
-                     WHERE peer_id=? AND status='sent' AND tg_message_id<=?""",
-                  (db.now_utc(), event.chat_id, event.max_id))
-            db.ex("""UPDATE list_items SET state='read', read_at=?
-                     WHERE peer_id=? AND state='sent' AND tg_message_id<=?""",
-                  (db.now_utc(), event.chat_id, event.max_id))
+            self._mark_read(event.chat_id, event.max_id)
+
+    async def handle_incoming(self, uid: int, text: str | None, tg_message_id: int | None, event=None):
+        lead = db.one("SELECT * FROM leads WHERE tg_id=%s", (uid,))
+        if lead:
+            db.ex("""INSERT INTO messages(account_id, lead_id, direction, tg_message_id, text)
+                     VALUES (%s, %s, 'in', %s, %s)""", (self.id, lead["id"], tg_message_id, text))
+            db.ex("""UPDATE campaign_leads SET state='replied', replied_at=now()
+                     WHERE lead_id=%s AND account_id=%s AND state IN ('sent', 'read')""", (lead["id"], self.id))
+        if leads.is_stop_message(text, db.get_setting("stop_words")):
+            if not lead:
+                lid, _ = leads.upsert_lead({"tg_id": uid, "source": "stop"})
+                lead = db.one("SELECT * FROM leads WHERE id=%s", (lid,))
+            leads.opt_out(lead["id"], f"ответил «{(text or '')[:50]}»")
+            db.log(f"Лид #{lead['id']} отписался: «{(text or '')[:50]}»", "warn", self.id)
+        for hook in incoming_hooks:
+            try:
+                await hook(self, event, lead)
+            except Exception as ex:  # хук не должен ронять приём
+                db.log(f"Ошибка хука входящих: {ex}", "error", self.id)
 
 
-def is_stop_message(text: str | None, stop_words: str) -> bool:
-    """Сообщение начинается со стоп-слова целиком: «Стоп!», «stop please» — да; «стопудово», «stopping» — нет."""
-    low = (text or "").lower().strip()
-    words = [w.strip().lower() for w in (stop_words or "").split(",") if w.strip()]
-    return bool(low) and any(re.match(rf"{re.escape(w)}(?!\w)", low) for w in words)
+class TgPool:
+    """Все аккаунты команды. Клиенты создаются при старте панели и при подключении нового аккаунта."""
+
+    def __init__(self):
+        self.accounts: dict[int, AccountClient] = {}
+        self.prepare_state: dict[int, dict] = {}   # campaign_id → ход «Найти получателей»
+
+    def get(self, account_id: int) -> AccountClient:
+        if account_id not in self.accounts:
+            self.accounts[account_id] = AccountClient(account_id)
+        return self.accounts[account_id]
+
+    async def start_all(self):
+        if not configured():
+            db.log("TG_API_ID / TG_API_HASH не заданы в .env — подключение аккаунтов невозможно", "error")
+            return
+        for a in db.q("SELECT id FROM tg_accounts WHERE status IN ('active', 'paused') ORDER BY id"):
+            acc = self.get(a["id"])
+            try:
+                await acc.start()
+            except Exception as e:
+                db.log(f"Не удалось подключить аккаунт: {type(e).__name__}: {e}", "error", a["id"])
+
+    async def stop_all(self):
+        for acc in self.accounts.values():
+            try:
+                await acc.stop()
+            except Exception:
+                pass
+
+    @property
+    def preparing(self) -> bool:
+        return any(st.get("running") for st in self.prepare_state.values())
+
+    def preparing_account(self, account_id: int) -> bool:
+        return any(st.get("running") and account_id in st.get("accounts", ()) for st in self.prepare_state.values())
+
+    async def prepare_campaign(self, campaign_id: int):
+        from .campaigns import campaign_accounts
+        accs = [self.get(a["id"]) for a in campaign_accounts(campaign_id)]
+        accs = [a for a in accs if a.authorized]
+        st = self.prepare_state[campaign_id] = {"running": True, "step": "запуск", "found": 0, "total": 0,
+                                                "accounts": [a.id for a in accs]}
+        try:
+            if not accs:
+                st["step"] = "нет подключённых аккаунтов"
+                return
+            # сверка «есть ли диалог» у ещё не закреплённых лидов считается заново по всем аккаунтам
+            db.ex("UPDATE campaign_leads SET real_dialog=NULL WHERE campaign_id=%s AND account_id IS NULL", (campaign_id,))
+            for acc in accs:
+                await acc.prepare(campaign_id, st)
+            st["step"] = "готово"
+            db.log(f"Поиск получателей кампании #{campaign_id}: найдено {st['found']} из {st['total']}")
+        except Exception as e:
+            if isinstance(e, errors.FloodWaitError):
+                st["step"] = f"Telegram попросил подождать {e.seconds} сек — запустите поиск ещё раз чуть позже"
+            else:
+                st["step"] = f"ошибка: {e}"
+            db.log(f"Поиск получателей: {type(e).__name__}: {e}", "error")
+        finally:
+            st["running"] = False
 
 
-def _merge_tags(old: str, new: str) -> str:
-    tags = [t.strip() for t in (old or "").split(",") if t.strip()]
-    for t in (new or "").split(","):
-        t = t.strip()
-        if t and t not in tags:
-            tags.append(t)
-    return ",".join(tags)
-
-
-tg = TgManager()
+tgm = TgPool()

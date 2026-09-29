@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<h3>{{ acc.label or acc.first_name or ('Аккаунт #' ~ acc.id) }} <span class="badge b-{{ acc.status }}">{{ ACCOUNT_STATUS_RU[acc.status] }}</span></h3>
+<p class="muted">{{ client.display() if client.authorized else 'не подключён' }} {{ acc.phone or '' }} · менеджер: {{ owner.name }} ·
+  отправка: {{ wstate.status or '—' }}</p>
+
+<form method="post" action="/accounts/{{ acc.id }}/settings">
+<article>
+<header><strong>Подпись</strong></header>
+<input name="label" value="{{ acc.label }}" maxlength="60">
+</article>
+<article>
+<header><strong>Прогрев</strong> <small class="muted">· сегодня {% if warmup_day %}день {{ warmup_day }}{% else %}ещё не начат{% endif %}, лимит {{ limit }}, отправлено {{ sent_today }}</small></header>
+<label><input type="checkbox" name="warmup_enabled" {% if acc.warmup_enabled %}checked{% endif %}> Постепенно увеличивать лимит</label>
+<div class="grid">
+  <label>Лимит в 1-й день<input type="number" name="warmup_start" value="{{ acc.warmup_start }}" min="0"></label>
+  <label>Прибавка в день<input type="number" name="warmup_step" value="{{ acc.warmup_step }}" min="0"></label>
+  <label>Потолок в день<input type="number" name="daily_max" value="{{ acc.daily_max }}" min="0"></label>
+  <label>Начало прогрева<input type="date" name="warmup_start_date" value="{{ acc.warmup_start_date or '' }}"></label>
+</div>
+<small class="muted">Лимит = min(потолок, старт + прибавка × дни с начала). Дата ставится сама при первой отправке; очистите, чтобы начать прогрев заново. Для первых сообщений незнакомым людям держите лимит низким: каждая жалоба «Спам» снижает возможности аккаунта.</small>
+</article>
+<article>
+<header><strong>Темп и рабочие часы</strong></header>
+<div class="grid">
+  <label>Пауза от, сек<input type="number" name="delay_min" value="{{ acc.delay_min }}" min="0"></label>
+  <label>Пауза до, сек<input type="number" name="delay_max" value="{{ acc.delay_max }}" min="0"></label>
+  <label>Рабочие часы с<input type="time" name="work_start" value="{{ acc.work_start.strftime('%H:%M') }}"></label>
+  <label>по<input type="time" name="work_end" value="{{ acc.work_end.strftime('%H:%M') }}"></label>
+</div>
+</article>
+{% if paused %}
+<article><header><strong>⚠ Ограничение Telegram до {{ paused|dt }}</strong> <small class="muted">({{ acc.pause_reason }})</small></header>
+<label><input type="checkbox" name="clear_pause"> Снять паузу вручную (не рекомендуется при PEER_FLOOD)</label></article>
+{% endif %}
+<button>Сохранить</button>
+</form>
+
+{% if client.authorized %}
+<details><summary class="muted">Выйти из аккаунта</summary>
+<form method="post" action="/accounts/{{ acc.id }}/logout" onsubmit="return confirm('Завершить сессию панели в Telegram?')">
+  <p class="muted">Лиды и история останутся закреплены за аккаунтом. Чтобы продолжить работу, войдите снова тем же аккаунтом.</p>
+  <button class="secondary">Выйти</button>
+</form></details>
+{% else %}<a href="/accounts/{{ acc.id }}/login" role="button">Войти в Telegram</a>{% endif %}
+{% endblock %}

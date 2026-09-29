@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<article style="max-width:480px;margin:auto">
+<header><strong>{{ user.name }}</strong> <small class="muted">· {{ user.login }} · {{ ROLES[user.role] }}</small></header>
+<form method="post" action="/users/{{ user.id }}/password">
+  <label>Новый пароль<input type="password" name="password" required minlength="8" autocomplete="new-password"></label>
+  <button>Сменить пароль</button>
+</form>
+<small class="muted">После смены пароля остальные ваши входы (другие браузеры) завершатся.</small>
+</article>
+{% endblock %}
