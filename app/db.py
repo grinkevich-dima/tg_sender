@@ -145,6 +145,11 @@ def ex(sql: str, params=()) -> int:
     return cur.lastrowid
 
 
+def changed(sql: str, params=()) -> int:
+    """UPDATE/DELETE → сколько строк затронуто."""
+    return conn().execute(sql, params).rowcount
+
+
 def now_utc() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 

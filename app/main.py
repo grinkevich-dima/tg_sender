@@ -5,22 +5,24 @@ import io
 import json
 import re
 import secrets
-from urllib.parse import quote, unquote
 from contextlib import asynccontextmanager
+from datetime import date, datetime
+from urllib.parse import quote, unquote, urlsplit
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.templating import Jinja2Templates
 from telethon import errors
 
 from . import db, worker
-from .config import BASE_DIR, PANEL_PASSWORD, PANEL_USER
+from .config import ALLOWED_HOSTS, BASE_DIR, PANEL_PASSWORD, PANEL_USER
 from .templating import render, variables_in
 from .tg import tg
 
 STATUS_RU = {"queued": "в очереди", "sent": "доставлено", "read": "прочитано", "replied": "ответил",
-             "failed": "ошибка", "skipped": "пропущено", "draft": "черновик", "running": "идёт",
+             "failed": "ошибка", "skipped": "пропущено", "sending": "отправляется", "draft": "черновик", "running": "идёт",
              "paused": "пауза", "done": "завершена"}
 
 
@@ -40,9 +42,19 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "app" / "templates"))
 templates.env.globals["STATUS_RU"] = STATUS_RU
 
 
-# ---------- защита панели паролем ----------
+# ---------- защита панели ----------
+def same_origin(request: Request) -> bool:
+    """POST принимаем только со страниц самой панели: иначе любой сайт, открытый в браузере,
+    может отправить форму на 127.0.0.1 и запустить рассылку (CSRF). Браузер всегда шлёт Origin
+    или Referer; запросы без них (curl, скрипты) — не из браузера, их пропускаем."""
+    src = request.headers.get("origin") or request.headers.get("referer")
+    return src is None or urlsplit(src).netloc == request.headers.get("host", "")
+
+
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
+    if request.method not in ("GET", "HEAD", "OPTIONS") and not same_origin(request):
+        return Response("Запрос с чужого сайта отклонён", 403)
     if PANEL_PASSWORD:
         ok = False
         h = request.headers.get("authorization", "")
@@ -55,6 +67,17 @@ async def basic_auth(request: Request, call_next):
         if not ok:
             return Response("Auth required", 401, {"WWW-Authenticate": 'Basic realm="tg-sender"'})
     return await call_next(request)
+
+
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+
+
+def local_url(url: str | None, default: str) -> str:
+    """Только путь внутри панели — чтобы редирект по Referer не уводил на чужой сайт."""
+    if not url:
+        return default
+    u = urlsplit(url)
+    return (u.path or default) + (f"?{u.query}" if u.query else "")
 
 
 FLASH_COOKIE = "flash"
@@ -320,9 +343,17 @@ async def templates_test(tid: int):
     if not tg.me:
         return back("/templates", err="Аккаунт не авторизован")
     t = db.one("SELECT * FROM templates WHERE id=?", (tid,))
+    if not t:
+        return back("/templates", err="Шаблон не найден")
     sample = db.one("SELECT * FROM contacts ORDER BY id LIMIT 1")
     text = render(t["body"], db.contact_vars(sample) if sample else {"first_name": "Иван", "name": "Иван Петров"})
-    await tg.client.send_message("me", "🧪 Тест шаблона «%s»:\n\n%s" % (t["name"], text))
+    try:
+        async with tg.lock:
+            await tg.client.send_message("me", "🧪 Тест шаблона «%s»:\n\n%s" % (t["name"], text))
+    except errors.FloodWaitError as e:
+        return back("/templates", err=f"Telegram просит подождать {e.seconds} сек")
+    except errors.RPCError as e:
+        return back("/templates", err=f"Не отправлено: {e}")
     return back("/templates", msg="Отправлено в «Избранное»")
 
 
@@ -429,13 +460,39 @@ async def settings_page(request: Request):
                 warmup_day=worker.warmup_day())
 
 
+INT_SETTINGS = {"warmup_start": "Лимит в 1-й день", "warmup_step": "Прибавка в день", "daily_max": "Потолок в день",
+                "delay_min": "Пауза от", "delay_max": "Пауза до"}
+
+
+def validate_settings(form) -> tuple[dict, str]:
+    """Проверяем всё до сохранения: кривое значение в БД роняет дашборд и воркер."""
+    vals = {k: str(form[k]).strip() for k in [*INT_SETTINGS, "work_start", "work_end", "stop_words",
+                                               "warmup_start_date"] if k in form}
+    for k, title in INT_SETTINGS.items():
+        if k in vals and not (vals[k].isdigit() and int(vals[k]) <= 100000):
+            return {}, f"«{title}»: нужно целое число от 0"
+    for k in ("work_start", "work_end"):
+        if k in vals:
+            try:
+                vals[k] = datetime.strptime(vals[k], "%H:%M").strftime("%H:%M")
+            except ValueError:
+                return {}, "Рабочие часы: формат ЧЧ:ММ, например 10:00"
+    if vals.get("warmup_start_date"):
+        try:
+            date.fromisoformat(vals["warmup_start_date"])
+        except ValueError:
+            return {}, "Дата начала прогрева: формат ГГГГ-ММ-ДД"
+    return vals, ""
+
+
 @app.post("/settings")
 async def settings_save(request: Request):
     form = await request.form()
-    for key in ["warmup_start", "warmup_step", "daily_max", "delay_min", "delay_max",
-                "work_start", "work_end", "stop_words", "warmup_start_date"]:
-        if key in form:
-            db.set_setting(key, str(form[key]).strip())
+    vals, err = validate_settings(form)
+    if err:
+        return back("/settings", err=f"Не сохранено. {err}")
+    for key, v in vals.items():
+        db.set_setting(key, v)
     db.set_setting("warmup_enabled", "1" if form.get("warmup_enabled") else "0")
     if form.get("clear_pause"):
         db.set_setting("paused_until", "")
@@ -452,7 +509,7 @@ async def log_page(request: Request):
 # ---------- списки обращений из xlsx ----------
 from . import outreach  # noqa: E402
 
-LIST_STATE_RU = {"new": "новая", "queued": "в очереди", "sent": "доставлено", "read": "прочитано",
+LIST_STATE_RU = {"new": "новая", "queued": "в очереди", "sending": "отправляется", "sent": "доставлено", "read": "прочитано",
                  "replied": "ответил", "failed": "ошибка", "skipped": "пропущено"}
 templates.env.globals["LIST_STATE_RU"] = LIST_STATE_RU
 templates.env.globals["KIND_RU"] = outreach.KIND_RU
@@ -560,7 +617,7 @@ async def list_action(lid: int, action: str):
 async def list_item_send_now(iid: int, request: Request):
     """Тестовая отправка одной строки сразу — мимо очереди, лимита и рабочих часов."""
     it = db.one("SELECT * FROM list_items WHERE id=?", (iid,))
-    ref = request.headers.get("referer") or (f"/lists/{it['list_id']}" if it else "/lists")
+    ref = local_url(request.headers.get("referer"), f"/lists/{it['list_id']}" if it else "/lists")
     if not it:
         return back("/lists", err="Строка не найдена")
     if not tg.me:
@@ -570,7 +627,12 @@ async def list_item_send_now(iid: int, request: Request):
         return back(ref, err=f"Отправка на паузе до {pu:%d.%m %H:%M} из-за ограничения Telegram")
     if it["state"] not in ("new", "queued", "failed", "skipped"):
         return back(ref, err="Эта строка уже отправлена")
-    res = await worker.send_list_item(it)
+    try:
+        res = await worker.send_list_item(it)
+    except worker.TRANSIENT_ERRORS as e:
+        return back(ref, err=f"Нет связи с Telegram ({type(e).__name__}), строка оставлена как была — повторите позже")
+    if res == "busy":
+        return back(ref, err="Эта строка уже отправляется — обновите страницу")
     it = db.one("SELECT * FROM list_items WHERE id=?", (iid,))
     who = it["title"] or it["first_name"] or f"строка {iid}"
     db.log(f"Тестовая отправка «{who}»: {res}{' — ' + it['error'] if it['error'] else ''}")

@@ -12,6 +12,8 @@ API_HASH = os.getenv("TG_API_HASH", "")
 
 PANEL_USER = os.getenv("PANEL_USER", "admin")
 PANEL_PASSWORD = os.getenv("PANEL_PASSWORD", "")
+# Имена хостов, по которым открывают панель (через запятую, «*» — любые). Защита от DNS-rebinding.
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "127.0.0.1,localhost").split(",") if h.strip()]
 
 DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)

@@ -4,6 +4,8 @@
 
 Стек: Python, [Telethon](https://docs.telethon.dev) (MTProto), FastAPI, SQLite. Всё работает одним процессом, данные лежат в папке `data/`.
 
+📚 **Документация:** [docs/](docs/README.md) — [быстрый старт](docs/quickstart.md) · [руководство](docs/user-guide.md) · [формат xlsx](docs/xlsx-format.md) · [прогрев и лимиты](docs/limits.md) · [частые проблемы](docs/troubleshooting.md) · [эксплуатация](docs/operations.md) · [архитектура](docs/architecture.md)
+
 ## Что умеет
 
 | Функция | Как работает |
@@ -42,7 +44,7 @@
 cp .env.example .env   # заполнить, обязательно PANEL_PASSWORD
 docker compose up -d --build
 ```
-Порт открыт только на `127.0.0.1`. Заходить через SSH-туннель: `ssh -L 8000:127.0.0.1:8000 user@server`, потом открыть http://127.0.0.1:8000. Или поставить nginx/Caddy с HTTPS.
+Порт открыт только на `127.0.0.1`. Заходить через SSH-туннель: `ssh -L 8000:127.0.0.1:8000 user@server`, потом открыть http://127.0.0.1:8000. Или поставить nginx/Caddy с HTTPS — тогда впишите домен в `ALLOWED_HOSTS` в `.env` и не переписывайте заголовок `Host` в прокси (панель принимает формы только со своего адреса).
 
 ## Рекомендации, чтобы аккаунт не ограничили
 
@@ -70,7 +72,7 @@ app/
   xlsx.py        — чтение .xlsx без сторонних библиотек
   db.py          — SQLite
 data/            — база и сессия (не публиковать!)
-tests/           — тесты с мок-клиентом: python -m pytest tests
+tests/           — тесты с мок-клиентом (Python 3.12): pip install -r requirements-dev.txt && python -m pytest tests
 ```
 
 ## Бэклог: ИИ-ответы (Claude)

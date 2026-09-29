@@ -1,5 +1,6 @@
 """Работа с личным аккаунтом Telegram (Telethon, MTProto)."""
 import asyncio
+import re
 from typing import Awaitable, Callable
 
 from telethon import TelegramClient, events, errors
@@ -340,23 +341,20 @@ class TgManager:
             uid = event.sender_id
             db.ex("""UPDATE list_items SET state='replied', replied_at=?
                      WHERE peer_id=? AND state IN ('sent','read')""", (db.now_utc(), uid))
-            low = (event.raw_text or "").lower().strip()
-            stops = [w.strip().lower() for w in db.get_setting("stop_words").split(",") if w.strip()]
-            if low and any(low == w or low.startswith(w) for w in stops):
-                db.ex("UPDATE list_items SET state='skipped', error='отписался' WHERE peer_id=? AND state='queued'", (uid,))
-                if not db.one("SELECT 1 FROM contacts WHERE tg_user_id=?", (uid,)):
-                    db.ex("INSERT INTO contacts(tg_user_id, opted_out, created_at) VALUES (?,1,?)", (uid, db.now_utc()))
             contact = db.one("SELECT * FROM contacts WHERE tg_user_id=?", (uid,))
             if contact:
                 db.ex("""UPDATE messages SET status='replied', replied_at=?
                          WHERE contact_id=? AND status IN ('sent','read')""", (db.now_utc(), contact["id"]))
-                text = (event.raw_text or "").lower().strip()
-                stop_words = [w.strip().lower() for w in db.get_setting("stop_words").split(",") if w.strip()]
-                if text and any(text == w or text.startswith(w) for w in stop_words):
+            if is_stop_message(event.raw_text, db.get_setting("stop_words")):
+                if contact:
                     db.ex("UPDATE contacts SET opted_out=1 WHERE id=?", (contact["id"],))
                     db.ex("UPDATE messages SET status='skipped', error='отписался' WHERE contact_id=? AND status='queued'",
                           (contact["id"],))
-                    db.log(f"Контакт #{contact['id']} отписался: «{event.raw_text[:50]}»", "warn")
+                else:
+                    db.ex("INSERT INTO contacts(tg_user_id, opted_out, created_at) VALUES (?,1,?)", (uid, db.now_utc()))
+                    contact = db.one("SELECT * FROM contacts WHERE tg_user_id=?", (uid,))
+                db.ex("UPDATE list_items SET state='skipped', error='отписался' WHERE peer_id=? AND state='queued'", (uid,))
+                db.log(f"Контакт #{contact['id']} отписался: «{(event.raw_text or '')[:50]}»", "warn")
             for hook in incoming_hooks:
                 try:
                     await hook(event, contact)
@@ -372,6 +370,13 @@ class TgManager:
             db.ex("""UPDATE list_items SET state='read', read_at=?
                      WHERE peer_id=? AND state='sent' AND tg_message_id<=?""",
                   (db.now_utc(), event.chat_id, event.max_id))
+
+
+def is_stop_message(text: str | None, stop_words: str) -> bool:
+    """Сообщение начинается со стоп-слова целиком: «Стоп!», «stop please» — да; «стопудово», «stopping» — нет."""
+    low = (text or "").lower().strip()
+    words = [w.strip().lower() for w in (stop_words or "").split(",") if w.strip()]
+    return bool(low) and any(re.match(rf"{re.escape(w)}(?!\w)", low) for w in words)
 
 
 def _merge_tags(old: str, new: str) -> str:

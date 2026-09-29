@@ -25,6 +25,10 @@ RECIPIENT_ERRORS = (
     errors.YouBlockedUserError,
 )
 
+# Сетевые сбои: сообщение возвращаем в очередь и пробуем позже, а не помечаем ошибкой
+TRANSIENT_ERRORS = (ConnectionError, OSError, asyncio.TimeoutError)
+INTERRUPTED = "прервано во время отправки — проверьте в Telegram, дошло ли сообщение"
+
 
 # ---------- лимиты ----------
 def daily_limit(today: date | None = None) -> int:
@@ -77,7 +81,17 @@ async def _sleep(seconds: float):
 
 
 # ---------- основной цикл ----------
+def recover_interrupted():
+    """После падения/перезапуска посреди отправки: неизвестно, ушло ли сообщение.
+    Повторять нельзя (будет дубль) — помечаем ошибкой, решение за человеком."""
+    a = db.changed("UPDATE messages SET status='failed', error=? WHERE status='sending'", (INTERRUPTED,))
+    b = db.changed("UPDATE list_items SET state='failed', error=? WHERE state='sending'", (INTERRUPTED,))
+    if a or b:
+        db.log(f"Найдено прерванных отправок: {a + b} — помечены ошибкой", "warn")
+
+
 async def run():
+    recover_interrupted()
     last_read_sync = datetime.min
     while True:
         try:
@@ -154,6 +168,9 @@ async def tick() -> float:
 
 
 async def send_one(msg) -> str:
+    # «занимаем» сообщение атомарно: второй параллельный вызов получит busy, а не отправит дубль
+    if not db.changed("UPDATE messages SET status='sending' WHERE id=? AND status='queued'", (msg["id"],)):
+        return "busy"
     contact = db.one("SELECT * FROM contacts WHERE id=?", (msg["contact_id"],))
     if not contact or contact["opted_out"]:
         db.ex("UPDATE messages SET status='skipped', error='отписан/удалён' WHERE id=?", (msg["id"],))
@@ -166,7 +183,11 @@ async def send_one(msg) -> str:
             entity = await tg.resolve(contact)
             sent = await tg.client.send_message(entity, text)
     except (errors.FloodWaitError, errors.PeerFloodError) as e:
+        db.ex("UPDATE messages SET status='queued' WHERE id=?", (msg["id"],))
         return _flood(e)
+    except TRANSIENT_ERRORS:
+        db.ex("UPDATE messages SET status='queued' WHERE id=?", (msg["id"],))
+        raise
     except RECIPIENT_ERRORS as e:
         _fail(msg["id"], type(e).__name__.replace("Error", ""))
         return "failed"
@@ -175,6 +196,10 @@ async def send_one(msg) -> str:
         return "failed"
     except errors.RPCError as e:
         _fail(msg["id"], f"{type(e).__name__}: {e}")
+        return "failed"
+    except Exception as e:   # иначе сообщение навсегда остаётся первым в очереди и блокирует её
+        _fail(msg["id"], f"{type(e).__name__}: {e}")
+        db.log(f"Сообщение #{msg['id']}: непредвиденная ошибка {type(e).__name__}: {e}", "error")
         return "failed"
 
     peer_id = getattr(sent, "chat_id", None) or getattr(getattr(sent, "peer_id", None), "user_id", None)
@@ -213,24 +238,54 @@ def _item_fail(item_id: int, err: str, state: str = "failed"):
     db.ex("UPDATE list_items SET state=?, error=? WHERE id=?", (state, err[:300], item_id))
 
 
+def _opted_out(user_id) -> bool:
+    return bool(user_id and db.one("SELECT 1 FROM contacts WHERE tg_user_id=? AND opted_out=1", (user_id,)))
+
+
+def _user_id(entity) -> int | None:
+    """ID пользователя из того, что вернул resolve (User, InputPeerUser или просто id)."""
+    if isinstance(entity, int):
+        return entity if entity > 0 else None
+    uid = getattr(entity, "user_id", None)
+    if uid is None and type(entity).__name__ == "User":
+        uid = entity.id
+    return uid
+
+
 async def send_list_item(item) -> str:
+    """item — строка list_items, прочитанная вызывающим; отправляем, только если её состояние
+    с тех пор не изменилось (двойной клик «отправить сейчас» или гонка с воркером → busy)."""
+    prev = item["state"]
+    if not db.changed("UPDATE list_items SET state='sending' WHERE id=? AND state=?", (item["id"], prev)):
+        return "busy"
     text = (item["text"] or "").strip()
     if not text:
         _item_fail(item["id"], "нет текста", "skipped")
         return "skipped"
-    if item["kind"] == "person" and item["peer_id"]:
-        if db.one("SELECT 1 FROM contacts WHERE tg_user_id=? AND opted_out=1", (item["peer_id"],)):
-            _item_fail(item["id"], "контакт отписался", "skipped")
-            return "skipped"
+    is_person = item["kind"] != "chat"
+    if is_person and item["peer_id"] and _opted_out(item["peer_id"]):
+        _item_fail(item["id"], "контакт отписался", "skipped")
+        return "skipped"
     try:
         async with tg.lock:
             entity = await tg.resolve_item(item)
+            uid = _user_id(entity) if is_person else None
+            if uid and uid != item["peer_id"]:
+                # адресат был указан только username: запоминаем id, чтобы ловить прочтения/ответы/отписку
+                if _opted_out(uid):
+                    _item_fail(item["id"], "контакт отписался", "skipped")
+                    return "skipped"
+                db.ex("UPDATE list_items SET peer_id=? WHERE id=?", (uid, item["id"]))
             reply_to = item["topic_id"] if item["topic_id"] and item["topic_id"] > 1 else None
             if type(entity).__name__ == "InputPeerChat":   # обычная группа — тем (форума) не бывает
                 reply_to = None
             sent = await tg.client.send_message(entity, text, reply_to=reply_to, link_preview=True)
     except (errors.FloodWaitError, errors.PeerFloodError) as e:
+        db.ex("UPDATE list_items SET state=? WHERE id=?", (prev, item["id"]))
         return _flood(e)
+    except TRANSIENT_ERRORS:
+        db.ex("UPDATE list_items SET state=? WHERE id=?", (prev, item["id"]))
+        raise
     except RECIPIENT_ERRORS as e:
         _item_fail(item["id"], type(e).__name__.replace("Error", ""))
         return "failed"
@@ -243,6 +298,10 @@ async def send_list_item(item) -> str:
         return "failed"
     except errors.RPCError as e:
         _item_fail(item["id"], f"{type(e).__name__}: {e}")
+        return "failed"
+    except Exception as e:
+        _item_fail(item["id"], f"{type(e).__name__}: {e}")
+        db.log(f"Строка #{item['id']}: непредвиденная ошибка {type(e).__name__}: {e}", "error")
         return "failed"
 
     db.ex("""UPDATE list_items SET state='sent', tg_message_id=?, sent_at=?, sent_day=?, error=NULL WHERE id=?""",
