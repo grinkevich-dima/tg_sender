@@ -26,6 +26,14 @@ def test_queries_and_parsing():
     assert cs.parse_link("просто текст") is None
 
 
+def test_app_links():
+    from app.web.common import tg_app_link
+    assert tg_app_link(-1001234567890, "biz_minsk", None) == "tg://resolve?domain=biz_minsk"
+    assert tg_app_link(-1001234567890, None, 42) == "tg://privatepost?channel=1234567890&post=42"
+    assert tg_app_link(-1001234567890, None, None) is None          # без сообщения приложение чат не откроет
+    assert tg_app_link(-4001234, None, 42) is None                  # старая группа без -100 — ссылки нет
+
+
 def test_score():
     assert cs.score(3, 3, 10000, 20, 1, None) == 100
     assert cs.score(3, 3, 10000, 20, 1, "крипта") == 0                 # стоп-слово
@@ -72,8 +80,8 @@ class SearchClient(FakeClient):
         cid = getattr(entity, "id", None)
         if cid == 12:
             return [types.SimpleNamespace(date=now - timedelta(days=90), message="давно тут никого")]
-        return [types.SimpleNamespace(date=now - timedelta(hours=i * 3), message="обсуждаем бизнес и маркетинг в Минске")
-                for i in range(30)]
+        return [types.SimpleNamespace(id=1000 - i, date=now - timedelta(hours=i * 3),
+                                      message="обсуждаем бизнес и маркетинг в Минске") for i in range(30)]
 
     async def get_entity(self, x):
         return {"biz_minsk": self.live, "biz_channel": self.chan}.get(x) or (_ for _ in ()).throw(ValueError("нет"))
@@ -149,6 +157,8 @@ def test_page_and_statuses(fast):
     c = browser("admin")
     html = c.get("/chat-search").text
     assert "Бизнес клуб Минск" in html and "https://t.me/biz_minsk" in html and "https://web.telegram.org/a/#-1000000000011" in html
+    assert "tg://resolve?domain=biz_minsk" in html
+    assert "tg://privatepost?channel=22&amp;post=1000" in html        # группа обсуждения без username
     fid = db.val("SELECT id FROM found_chats WHERE username='biz_minsk'")
     c.post(f"/chat-search/found/{fid}/rejected")
     assert "Бизнес клуб Минск" not in c.get("/chat-search").text               # «в работе» без отклонённых

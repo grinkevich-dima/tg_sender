@@ -88,7 +88,7 @@ def _dialog(peer_id, title, *, creator=False, admin=False, group=True, members=N
     ent = types.SimpleNamespace(id=abs(peer_id), creator=creator, admin_rights=object() if admin else None,
                                 participants_count=members, username=username)
     return types.SimpleNamespace(id=peer_id, name=title, is_user=False, is_group=group, is_channel=not group,
-                                 message=object(), entity=ent)
+                                 message=types.SimpleNamespace(id=500), entity=ent)
 
 
 def _member(uid, first, joined=None, bot=False):
@@ -107,6 +107,7 @@ class GroupClient(FakeClient):
         yield _dialog(-1002, "Чужой чат")                        # просто участник
         yield _dialog(-1003, "Канал", admin=True, group=False)   # канал — не группа
         yield _dialog(-1004, "Семинар", admin=True)
+        yield _dialog(-1001234567890, "Закрытый клуб", admin=True)
 
     async def iter_participants(self, peer):
         for m in self.members.get(peer, []):
@@ -117,9 +118,9 @@ def test_own_groups_found_and_members_imported():
     u = make_user()
     a = make_account(u["id"], client=GroupClient())
     run(tgm.refresh_groups(a))
-    assert tgm.groups_state[a] == {"running": False, "step": "готово", "groups": 4}
+    assert tgm.groups_state[a] == {"running": False, "step": "готово", "groups": 5}
     own = {r["title"] for r in db.q("SELECT title FROM tg_dialogs WHERE account_id=%s", (a,))}
-    assert own == {"Вебинар: маркетинг", "Чужой чат", "Канал", "Семинар"}
+    assert own == {"Вебинар: маркетинг", "Чужой чат", "Канал", "Семинар", "Закрытый клуб"}
 
     sid = segments.create("Октябрьский вебинар", "", u["id"])
     assert run(tgm.get(a).import_group_members(-1001, sid, "вебинар")) == (2, 2, 2)   # бот не попал
@@ -145,6 +146,8 @@ def test_import_group_via_panel_checks_account_owner():
     page_html = c.get(f"/segments/{sid}").text
     assert "Вебинар: маркетинг" in page_html and 'id="group-q"' in page_html
     assert "https://web.telegram.org/a/#-1001" in page_html and "https://t.me/webinar_mkt" in page_html
+    assert "tg://resolve?domain=webinar_mkt" in page_html                       # публичная — по username
+    assert "tg://privatepost?channel=1234567890&amp;post=500" in page_html      # без username — через сообщение
     c.post(f"/segments/{sid}/import-group", data={"group": f"{a}:-1001"})
     assert segments.size(sid) == 2
 

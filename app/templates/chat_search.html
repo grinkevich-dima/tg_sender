@@ -90,6 +90,7 @@
     <br><small>
       {% if f.username %}<a href="https://t.me/{{ f.username }}" target="_blank" rel="noopener">t.me/{{ f.username }}</a>{% elif f.invite_link %}<a href="{{ f.invite_link }}" target="_blank" rel="noopener">приглашение</a>{% endif %}
       {% if f.tg_id %}{% if f.username or f.invite_link %} · {% endif %}<a href="https://web.telegram.org/a/#{{ f.tg_id }}" target="_blank" rel="noopener">открыть ↗</a>{% endif %}
+      {% set app = tg_app_link(f.tg_id, f.username, f.last_message_id) %}{% if app %} · <a href="{{ app }}" title="Открыть в приложении Telegram">в приложении</a>{% endif %}
       {% if f.member %} · <span class="badge b-read">состою</span>{% endif %}
     </small>
     {% if f.about %}<details><summary class="muted" style="font-size:.8em">описание</summary><small>{{ f.about }}</small></details>{% endif %}</td>

@@ -97,7 +97,7 @@ def parse_link(line: str) -> tuple[str, str] | None:
 async def _evaluate(client, entity) -> dict:
     """Описание, участники, активность и язык по последним сообщениям публичной группы."""
     info = {"about": "", "members": getattr(entity, "participants_count", None), "texts": [],
-            "last_message_at": None, "msgs_per_day": None}
+            "last_message_at": None, "msgs_per_day": None, "last_message_id": None}
     try:
         full = await client(GetFullChannelRequest(entity))
         info["about"] = full.full_chat.about or ""
@@ -111,6 +111,7 @@ async def _evaluate(client, entity) -> dict:
     dated = [m for m in msgs if getattr(m, "date", None)]
     if dated:
         info["last_message_at"] = max(m.date for m in dated)
+        info["last_message_id"] = max((getattr(m, "id", 0) or 0) for m in dated) or None
         week_ago = db.now_utc() - timedelta(days=7)
         recent = [m for m in dated if m.date >= week_ago]
         if len(recent) == len(dated) and len(dated) >= 2:
@@ -141,6 +142,7 @@ def _save(search: dict, query: str, via: str, *, tg_id=None, username=None, invi
         silent = (db.now_utc() - info["last_message_at"]).total_seconds() / 86400 if info["last_message_at"] else None
         match, stop = count_matches(text, kws), find_stop(" ".join([title, info["about"]]), stops)
         fields.update(about=info["about"], members=info["members"], last_message_at=info["last_message_at"],
+                      last_message_id=info.get("last_message_id"),
                       msgs_per_day=info["msgs_per_day"], lang=detect_lang(info["texts"]), match=match, stop_hit=stop,
                       score=score(match, len(kws), info["members"], info["msgs_per_day"], silent, stop),
                       checked_at=db.now_utc())

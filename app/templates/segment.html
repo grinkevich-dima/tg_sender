@@ -37,6 +37,7 @@
           <td><small>{{ g.acc_label }}</small></td>
           <td style="white-space:nowrap"><small>
             <a href="https://web.telegram.org/a/#{{ g.peer_id }}" target="_blank" rel="noopener" title="Открыть в веб-версии Telegram (под этим аккаунтом)">открыть ↗</a>
+            {% set app = tg_app_link(g.peer_id, g.username, g.last_message_id) %}{% if app %} · <a href="{{ app }}" title="Открыть в приложении Telegram">в приложении</a>{% endif %}
             {% if g.username %}<br><a href="https://t.me/{{ g.username }}" target="_blank" rel="noopener">t.me/{{ g.username }}</a>{% endif %}
           </small></td>
         </tr>

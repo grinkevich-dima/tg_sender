@@ -33,6 +33,19 @@ def _dt(v, fmt="%d.%m %H:%M"):
 
 templates.env.filters["dt"] = _dt
 
+
+def tg_app_link(peer_id: int | None, username: str | None, message_id: int | None) -> str | None:
+    """Ссылка, которая открывает группу в приложении Telegram (Desktop, мобильное).
+    Публичная — по username; без username — через номер сообщения (иначе приложение чат не откроет)."""
+    if username:
+        return f"tg://resolve?domain={username}"
+    if peer_id and message_id and peer_id < -10**12:          # супергруппа: marked id = -(10^12 + id канала)
+        return f"tg://privatepost?channel={-peer_id - 10**12}&post={message_id}"
+    return None
+
+
+templates.env.globals["tg_app_link"] = tg_app_link
+
 FLASH_COOKIE = "flash"
 
 
