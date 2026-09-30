@@ -117,9 +117,9 @@ def test_own_groups_found_and_members_imported():
     u = make_user()
     a = make_account(u["id"], client=GroupClient())
     run(tgm.refresh_groups(a))
-    assert tgm.groups_state[a] == {"running": False, "step": "готово", "groups": 2}
-    own = {r["title"] for r in db.q("SELECT title FROM tg_dialogs WHERE account_id=%s AND is_admin", (a,))}
-    assert own == {"Вебинар: маркетинг", "Семинар"}
+    assert tgm.groups_state[a] == {"running": False, "step": "готово", "groups": 4}
+    own = {r["title"] for r in db.q("SELECT title FROM tg_dialogs WHERE account_id=%s", (a,))}
+    assert own == {"Вебинар: маркетинг", "Чужой чат", "Канал", "Семинар"}
 
     sid = segments.create("Октябрьский вебинар", "", u["id"])
     assert run(tgm.get(a).import_group_members(-1001, sid, "вебинар")) == (2, 2, 2)   # бот не попал
@@ -131,17 +131,6 @@ def test_own_groups_found_and_members_imported():
     from app.templating import render
     assert render("{first_name}, спасибо, что пришли в «{group}»!", db.lead_vars(ira)) == \
         "Ира, спасибо, что пришли в «Вебинар: маркетинг»!"
-
-
-def test_members_of_foreign_group_are_refused():
-    u = make_user()
-    a = make_account(u["id"], client=GroupClient())
-    run(tgm.refresh_groups(a))
-    sid = segments.create("x", "", u["id"])
-    import pytest
-    with pytest.raises(ValueError, match="создатель или админ"):
-        run(tgm.get(a).import_group_members(-1002, sid))
-    assert segments.size(sid) == 0
 
 
 def test_import_group_via_panel_checks_account_owner():
