@@ -21,7 +21,7 @@ from telethon.tl.types import InputPeerUser  # noqa: E402
 from app import auth, db, worker  # noqa: E402
 from app.tg import tgm  # noqa: E402
 
-TABLES = ["segment_leads", "segments", "messages", "campaign_leads", "campaign_steps", "campaign_accounts", "campaigns", "tg_dialogs",
+TABLES = ["found_chat_hits", "found_chats", "chat_searches", "segment_leads", "segments", "messages", "campaign_leads", "campaign_steps", "campaign_accounts", "campaigns", "tg_dialogs",
           "leads", "templates", "event_log", "tg_accounts", "users", "settings"]
 
 
@@ -47,6 +47,8 @@ def clean():
         db.set_setting(k, v)
     tgm.accounts.clear()
     tgm.prepare_state.clear()
+    tgm.groups_state.clear()
+    tgm.search_state.clear()
     worker.state.clear()
     yield
 

@@ -453,6 +453,7 @@ class TgPool:
         self.accounts: dict[int, AccountClient] = {}
         self.prepare_state: dict[int, dict] = {}   # campaign_id → ход «Найти получателей»
         self.groups_state: dict[int, dict] = {}    # account_id → ход «Обновить список своих групп»
+        self.search_state: dict[int, dict] = {}    # chat_search_id → ход «Поиск групп»
 
     def get(self, account_id: int) -> AccountClient:
         if account_id not in self.accounts:
@@ -494,7 +495,29 @@ class TgPool:
 
     def preparing_account(self, account_id: int) -> bool:
         return (any(st.get("running") and account_id in st.get("accounts", ()) for st in self.prepare_state.values())
-                or bool(self.groups_state.get(account_id, {}).get("running")))
+                or bool(self.groups_state.get(account_id, {}).get("running"))
+                or any(st.get("running") and st.get("account_id") == account_id for st in self.search_state.values()))
+
+    async def run_chat_search(self, search_id: int, account_id: int, links: list[str] | None = None):
+        """Поиск групп по теме (или проверка списка ссылок) в фоне, с ходом в search_state."""
+        from . import chat_search
+        st = self.search_state[search_id] = {"running": True, "account_id": account_id, "step": "запуск",
+                                             "done": 0, "total": 0, "found": 0}
+        try:
+            if links is not None:
+                ok, skipped = await chat_search.check_links(self.get(account_id), search_id, links, st)
+                st["step"] = f"проверено ссылок: {ok}" + (f"; пропущено: {'; '.join(skipped[:10])}" if skipped else "")
+                db.ex("UPDATE chat_searches SET status='done', step=%s, finished_at=now() WHERE id=%s", (st["step"], search_id))
+            else:
+                await chat_search.run_search(self.get(account_id), search_id, st)
+                st["step"] = "готово"
+        except Exception as e:
+            st["step"] = (f"Telegram попросил подождать {e.seconds} сек — продолжите поиск позже"
+                          if isinstance(e, errors.FloodWaitError) else f"ошибка: {e}")
+            db.ex("UPDATE chat_searches SET status='error', step=%s WHERE id=%s", (st["step"], search_id))
+            db.log(f"Поиск групп #{search_id}: {type(e).__name__}: {e}", "error", account_id)
+        finally:
+            st["running"] = False
 
     async def prepare_campaign(self, campaign_id: int):
         from .campaigns import campaign_accounts

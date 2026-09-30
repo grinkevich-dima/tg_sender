@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block content %}
+<h3>Поиск групп</h3>
+{% if not accounts %}<div class="flash err">Нет подключённых аккаунтов — <a href="/accounts">подключите</a>: поиск идёт от аккаунта Telegram.</div>{% endif %}
+
+<article class="src-tabs">
+  <nav class="tab-bar" role="tablist">
+    <button type="button" role="tab" data-tab="topic">Новый поиск по теме</button>
+    <button type="button" role="tab" data-tab="links">Проверить ссылки</button>
+  </nav>
+  <section role="tabpanel" data-panel="topic">
+  <form method="post" action="/chat-search/create">
+    <div class="grid">
+      <input name="name" placeholder="Название, напр. «Собственники бизнеса, Минск»">
+      <select name="account_id" required>{% for a in accounts %}<option value="{{ a.id }}">Искать от: {{ a.label or a.first_name or ('#' ~ a.id) }}</option>{% endfor %}</select>
+    </div>
+    <label>Ключевые слова <small class="muted">— через запятую или с новой строки</small>
+      <textarea name="keywords" rows="2" required placeholder="собственник, предприниматель, бизнес клуб, маркетинг"></textarea></label>
+    <div class="grid">
+      <label>География <small class="muted">(необязательно)</small><input name="geo" placeholder="Минск, Беларусь"></label>
+      <label>Стоп-слова <small class="muted">(необязательно)</small><input name="stop_words" placeholder="вакансии, крипта, ставки"></label>
+    </div>
+    <button {% if not accounts %}disabled{% endif %}>Искать группы</button>
+  </form>
+  <small class="muted">Каждое слово ищется само по себе и в паре с каждым местом (не больше {{ max_queries }} запросов), с паузами — это несколько минут.
+    В список попадают только публичные группы: найденные поиском и группы обсуждения найденных каналов. На время поиска отправка с аккаунта стоит.</small>
+  </section>
+  <section role="tabpanel" data-panel="links" hidden>
+  <form method="post" action="/chat-search/links">
+    <label>Ссылки на группы <small class="muted">— по одной в строке: t.me/name, @name, t.me/+приглашение (до 100)</small>
+      <textarea name="links" rows="5" required></textarea></label>
+    <div class="grid">
+      <input name="keywords" placeholder="Ключевые слова для оценки (необязательно)">
+      <input name="stop_words" placeholder="Стоп-слова (необязательно)">
+      <select name="account_id" required>{% for a in accounts %}<option value="{{ a.id }}">Проверять от: {{ a.label or a.first_name or ('#' ~ a.id) }}</option>{% endfor %}</select>
+    </div>
+    <button {% if not accounts %}disabled{% endif %}>Проверить</button>
+  </form>
+  <small class="muted">Удобно для списков из каталогов (tgstat.ru и т.п.). Каналы пропускаются. По приглашению в закрытую группу видно только название и число участников.</small>
+  </section>
+</article>
+
+{% if searches %}
+<details {% if running or search %}open{% endif %}><summary><strong>Поиски</strong> <small class="muted">({{ searches|length }})</small></summary>
+<table>
+<thead><tr><th>Поиск</th><th>Слова / место</th><th>Аккаунт</th><th>Найдено</th><th>Состояние</th><th></th></tr></thead>
+{% for s in searches %}{% set st = states.get(s.id) %}
+<tr>
+  <td><a href="/chat-search?search={{ s.id }}&status=all">{{ s.name }}</a><br><small class="muted">{{ s.author or '' }} · {{ s.created_at|dt }}</small></td>
+  <td><small>{{ s.keywords|join(', ') }}{% if s.geo %}<br><span class="muted">{{ s.geo|join(', ') }}</span>{% endif %}</small></td>
+  <td><small>{{ s.acc_label or '—' }}</small></td>
+  <td>{{ s.found }}</td>
+  <td><small id="st-{{ s.id }}">{% if st and st.running %}⏳ {{ st.step }}{% else %}{{ s.step or s.status }}{% endif %}</small></td>
+  <td class="row-actions">
+    {% if s.keywords and not (st and st.running) %}<form method="post" action="/chat-search/{{ s.id }}/rerun"><button class="outline" title="Искать заново: добавит новые группы и обновит оценки">↻</button></form>{% endif %}
+    {% if is_admin or s.created_by == user.id %}<form method="post" action="/chat-search/{{ s.id }}/delete" onsubmit="return confirm('Удалить поиск? Найденные группы останутся')"><button class="outline secondary">✕</button></form>{% endif %}
+  </td>
+</tr>
+{% endfor %}
+</table>
+</details>
+{% endif %}
+
+<h4 style="margin-top:1rem">Найденные группы</h4>
+<nav><ul>
+  {% set base = '?search=' ~ search ~ '&q=' ~ q ~ '&min_score=' ~ min_score ~ '&sort=' ~ sort %}
+  <li><a href="{{ base }}&status=active" {% if status=='active' %}aria-current="page"{% endif %}>в работе ({{ counts.get('new',0) + counts.get('interesting',0) }})</a></li>
+  {% for k, v in STATUS_RU.items() %}<li><a href="{{ base }}&status={{ k }}" {% if status==k %}aria-current="page"{% endif %}>{{ v }} ({{ counts.get(k,0) }})</a></li>{% endfor %}
+  <li><a href="{{ base }}&status=all" {% if status=='all' %}aria-current="page"{% endif %}>все</a></li>
+</ul></nav>
+<form method="get" class="grid">
+  <input type="hidden" name="status" value="{{ status }}">
+  <select name="search"><option value="0">Все поиски</option>{% for s in searches %}<option value="{{ s.id }}" {% if s.id==search %}selected{% endif %}>{{ s.name }}</option>{% endfor %}</select>
+  <input name="q" value="{{ q }}" placeholder="Название, username, описание">
+  <select name="min_score">{% for v in [0, 30, 50, 70] %}<option value="{{ v }}" {% if v==min_score %}selected{% endif %}>{{ 'любая оценка' if not v else 'оценка от ' ~ v }}</option>{% endfor %}</select>
+  <select name="sort">
+    <option value="score" {% if sort=='score' %}selected{% endif %}>по оценке</option>
+    <option value="members" {% if sort=='members' %}selected{% endif %}>по участникам</option>
+    <option value="activity" {% if sort=='activity' %}selected{% endif %}>по активности</option>
+    <option value="new" {% if sort=='new' %}selected{% endif %}>сначала новые</option>
+  </select>
+  <button class="outline">Показать</button>
+</form>
+<p class="muted">Найдено: {{ total }}</p>
+<table>
+<thead><tr><th>Группа</th><th>Участников</th><th>Активность</th><th>Язык</th><th>Тема</th><th>Оценка</th><th>Откуда</th><th>Статус</th></tr></thead>
+{% for f in rows %}
+<tr {% if f.status=='rejected' %}style="opacity:.5"{% endif %}>
+  <td><b>{{ f.title or '—' }}</b>
+    <br><small>
+      {% if f.username %}<a href="https://t.me/{{ f.username }}" target="_blank" rel="noopener">t.me/{{ f.username }}</a>{% elif f.invite_link %}<a href="{{ f.invite_link }}" target="_blank" rel="noopener">приглашение</a>{% endif %}
+      {% if f.tg_id %}{% if f.username or f.invite_link %} · {% endif %}<a href="https://web.telegram.org/a/#{{ f.tg_id }}" target="_blank" rel="noopener">открыть ↗</a>{% endif %}
+      {% if f.member %} · <span class="badge b-read">состою</span>{% endif %}
+    </small>
+    {% if f.about %}<details><summary class="muted" style="font-size:.8em">описание</summary><small>{{ f.about }}</small></details>{% endif %}</td>
+  <td>{{ f.members or '—' }}</td>
+  <td><small>{% if f.msgs_per_day is not none %}{{ f.msgs_per_day }} сообщ./день{% else %}—{% endif %}
+    {% if f.last_message_at %}<br><span class="muted">последнее {{ f.last_message_at|dt }}</span>{% endif %}</small></td>
+  <td><small>{{ f.lang or '—' }}</small></td>
+  <td><small>{% if f.stop_hit %}<span class="log-error">стоп: {{ f.stop_hit }}</span>{% else %}совпадений: {{ f.match }}{% endif %}</small></td>
+  <td><b>{{ f.score }}</b></td>
+  <td><small>{{ VIA_RU.get(f.via, f.via) }}<br><span class="muted" title="{{ f.queries }}">запросов: {{ f.hits }}</span></small></td>
+  <td class="row-actions">
+    <span class="badge b-{{ 'queued' if f.status=='new' else ('sent' if f.status=='interesting' else ('read' if f.status=='joined' else 'skipped')) }}">{{ STATUS_RU[f.status] }}</span><br>
+    {% if f.status != 'interesting' %}<form method="post" action="/chat-search/found/{{ f.id }}/interesting"><button class="outline" title="Интересна">★</button></form>{% endif %}
+    {% if f.status != 'rejected' %}<form method="post" action="/chat-search/found/{{ f.id }}/rejected"><button class="outline secondary" title="Отклонить — больше не показывать в работе">✕</button></form>
+    {% else %}<form method="post" action="/chat-search/found/{{ f.id }}/new"><button class="outline" title="Вернуть">↺</button></form>{% endif %}
+  </td>
+</tr>
+{% else %}<tr><td colspan="8" class="muted">Пока ничего — запустите поиск по теме или проверьте ссылки</td></tr>{% endfor %}
+</table>
+{% if total > p*per_page %}<a href="{{ base }}&status={{ status }}&p={{ p+1 }}">Следующая страница →</a>{% endif %}
+
+<script>
+(function(){
+  const bar = document.querySelector('.src-tabs .tab-bar');
+  if (bar) {
+    const KEY = 'chat-search-tab';
+    const show = name => {
+      for (const b of bar.querySelectorAll('[data-tab]')) b.setAttribute('aria-selected', b.dataset.tab === name);
+      for (const p of document.querySelectorAll('.src-tabs [data-panel]')) p.hidden = p.dataset.panel !== name;
+      try { localStorage.setItem(KEY, name); } catch (e) {}
+    };
+    let saved = null; try { saved = localStorage.getItem(KEY); } catch (e) {}
+    show(bar.querySelector(`[data-tab="${saved}"]`) ? saved : 'topic');
+    bar.addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) show(b.dataset.tab); });
+  }
+  {% if running %}
+  // ход поиска: обновляем состояние, по окончании — перезагружаем список
+  (async function poll(){
+    try {
+      const j = await (await fetch('/chat-search/state')).json();
+      let still = false;
+      for (const [sid, st] of Object.entries(j)) {
+        const el = document.getElementById('st-' + sid);
+        if (el && st.running) el.textContent = `⏳ ${st.step} · найдено ${st.found}`;
+        still = still || st.running;
+      }
+      if (still) setTimeout(poll, 3000); else location.reload();
+    } catch (e) { setTimeout(poll, 5000); }
+  })();
+  {% endif %}
+})();
+</script>
+{% endblock %}
