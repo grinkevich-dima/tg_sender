@@ -84,9 +84,9 @@ def test_segment_csv_upload_via_panel():
 
 
 # ---- свои группы ----
-def _dialog(peer_id, title, *, creator=False, admin=False, group=True, members=None):
+def _dialog(peer_id, title, *, creator=False, admin=False, group=True, members=None, username=None):
     ent = types.SimpleNamespace(id=abs(peer_id), creator=creator, admin_rights=object() if admin else None,
-                                participants_count=members)
+                                participants_count=members, username=username)
     return types.SimpleNamespace(id=peer_id, name=title, is_user=False, is_group=group, is_channel=not group,
                                  message=object(), entity=ent)
 
@@ -103,7 +103,7 @@ class GroupClient(FakeClient):
                -1002: [_member(94, "Чужой")]}
 
     async def iter_dialogs(self, limit=None):
-        yield _dialog(-1001, "Вебинар: маркетинг", creator=True, members=3)
+        yield _dialog(-1001, "Вебинар: маркетинг", creator=True, members=3, username="webinar_mkt")
         yield _dialog(-1002, "Чужой чат")                        # просто участник
         yield _dialog(-1003, "Канал", admin=True, group=False)   # канал — не группа
         yield _dialog(-1004, "Семинар", admin=True)
@@ -144,5 +144,6 @@ def test_import_group_via_panel_checks_account_owner():
     c = browser("admin")
     page_html = c.get(f"/segments/{sid}").text
     assert "Вебинар: маркетинг" in page_html and 'id="group-q"' in page_html
+    assert "https://web.telegram.org/a/#-1001" in page_html and "https://t.me/webinar_mkt" in page_html
     c.post(f"/segments/{sid}/import-group", data={"group": f"{a}:-1001"})
     assert segments.size(sid) == 2

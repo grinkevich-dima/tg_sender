@@ -32,6 +32,15 @@
   nav.top form { display:inline; margin:0; } nav.top form button { padding:.2rem .6rem; font-size:.8em; width:auto; margin:0; }
   .acc-chips label { display:inline-flex; gap:.3rem; margin-right:1rem; }
   .reply { border-left: 3px solid #86efac; padding-left:.6rem; margin:.4rem 0; }
+  .tab-bar { display:flex; flex-wrap:wrap; justify-content:flex-start; gap:.25rem; border-bottom:1px solid var(--pico-muted-border-color); margin:-.25rem 0 1rem; }
+  .tab-bar button { width:auto; margin:0; padding:.45rem .9rem; font-size:.9em; background:none; border:none; border-bottom:2px solid transparent;
+                    border-radius:0; color:var(--pico-muted-color); }
+  .tab-bar button[aria-selected="true"] { color:var(--pico-primary); border-bottom-color:var(--pico-primary); font-weight:600; }
+  .tab-bar button:focus-visible { outline:2px solid var(--pico-primary); }
+  .group-list { max-height: 360px; overflow:auto; border:1px solid var(--pico-muted-border-color); border-radius:6px; }
+  .group-list table { margin:0; }
+  .group-list thead th { position:sticky; top:0; background:var(--pico-background-color); }
+  .group-list td input[type=radio] { margin:0; }
   table { font-size: .9em; }
   .row-actions form { display:inline; }
   .row-actions button, .row-actions a[role=button] { padding: .3rem .8rem; font-size: .85em; margin:0 .3rem .3rem 0; width:auto; }

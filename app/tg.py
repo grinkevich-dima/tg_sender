@@ -271,13 +271,13 @@ class AccountClient:
         kind = "user" if d.is_user else ("channel" if d.is_channel and not d.is_group else "group")
         has_private = bool(d.is_user and d.message is not None)
         e = d.entity
-        # своя группа: аккаунт её создал или в ней админ
         is_admin = kind == "group"
-        db.ex("""INSERT INTO tg_dialogs(account_id, peer_id, title, kind, has_private, is_admin, members, updated_at)
-                 VALUES (%s,%s,%s,%s,%s,%s,%s, now()) ON CONFLICT (account_id, peer_id) DO UPDATE
+        db.ex("""INSERT INTO tg_dialogs(account_id, peer_id, title, kind, has_private, is_admin, members, username, updated_at)
+                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s, now()) ON CONFLICT (account_id, peer_id) DO UPDATE
                  SET title=excluded.title, kind=excluded.kind, has_private=excluded.has_private,
-                     is_admin=excluded.is_admin, members=excluded.members, updated_at=now()""",
-              (self.id, d.id, d.name or "", kind, has_private, is_admin, getattr(e, "participants_count", None)))
+                     is_admin=excluded.is_admin, members=excluded.members, username=excluded.username, updated_at=now()""",
+              (self.id, d.id, d.name or "", kind, has_private, is_admin, getattr(e, "participants_count", None),
+               getattr(e, "username", None)))
         return has_private
 
     # ---------- свои группы ----------

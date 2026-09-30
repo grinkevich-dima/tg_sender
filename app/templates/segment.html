@@ -12,19 +12,44 @@
 <p><a href="/campaigns" role="button" class="outline" style="width:auto">➕ Кампания по этому сегменту</a>
   <a href="/leads?segment={{ seg.id }}" style="margin-left:1rem">открыть в «Лидах»</a></p>
 
-<article>
-  <header><strong>Из своей группы</strong> <small class="muted">· участники вебинаров и семинаров</small></header>
+<article class="src-tabs">
+  <nav class="tab-bar" role="tablist">
+    <button type="button" role="tab" data-tab="groups">Из каналов TG</button>
+    <button type="button" role="tab" data-tab="csv">Из CSV</button>
+    <button type="button" role="tab" data-tab="contacts">Из контактов TG</button>
+    <button type="button" role="tab" data-tab="tag">По тегу</button>
+  </nav>
+  <section role="tabpanel" data-panel="groups">
+  <p class="muted" style="margin-bottom:.6rem">Участники вебинаров и семинаров</p>
   {% if groups %}
-  <form method="post" action="/segments/{{ seg.id }}/import-group" class="grid">
+  <form method="post" action="/segments/{{ seg.id }}/import-group">
     <div>
       <input type="search" id="group-q" placeholder="Поиск группы по названию…" autocomplete="off" style="margin-bottom:.3rem">
-      <select name="group" id="group-sel" required size="{{ [groups|length, 6]|min if groups|length > 1 else 1 }}">
-        {% for g in groups %}<option value="{{ g.account_id }}:{{ g.peer_id }}" {% if loop.first %}selected{% endif %}>{{ g.title }}{% if g.members %} · {{ g.members }} уч.{% endif %} — {{ g.acc_label }}</option>{% endfor %}
-      </select>
+      <div class="group-list">
+      <table>
+        <thead><tr><th></th><th>Группа</th><th>Участников</th><th>Аккаунт</th><th>Открыть</th></tr></thead>
+        <tbody id="group-rows">
+        {% for g in groups %}
+        <tr data-title="{{ g.title|lower }}">
+          <td><input type="radio" name="group" value="{{ g.account_id }}:{{ g.peer_id }}" id="g{{ loop.index }}" {% if loop.first %}checked{% endif %} required></td>
+          <td><label for="g{{ loop.index }}">{{ g.title }}</label></td>
+          <td>{{ g.members or '—' }}</td>
+          <td><small>{{ g.acc_label }}</small></td>
+          <td style="white-space:nowrap"><small>
+            <a href="https://web.telegram.org/a/#{{ g.peer_id }}" target="_blank" rel="noopener" title="Открыть в веб-версии Telegram (под этим аккаунтом)">открыть ↗</a>
+            {% if g.username %}<br><a href="https://t.me/{{ g.username }}" target="_blank" rel="noopener">t.me/{{ g.username }}</a>{% endif %}
+          </small></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
       <small class="muted" id="group-cnt"></small>
     </div>
-    <input name="tag" placeholder="Тег, напр. «вебинар-октябрь» (необязательно)">
-    <button>Добавить участников</button>
+    <div class="grid" style="margin-top:.6rem">
+      <input name="tag" placeholder="Тег, напр. «вебинар-октябрь» (необязательно)">
+      <button>Добавить участников выбранной группы</button>
+    </div>
   </form>
   <small class="muted">Повторная загрузка добавит только новых участников.
     В шаблоне доступны <code>{group}</code> — название группы и <code>{joined}</code> — дата вступления.</small>
@@ -36,20 +61,16 @@
   </form>
   {% for aid, st in groups_state.items() %}<small class="muted">Аккаунт #{{ aid }}: {{ st.step }}{% if st.step == 'готово' %} · своих групп: {{ st.groups }}{% endif %}</small><br>{% endfor %}
   {% else %}<p class="muted">Нет подключённых аккаунтов — <a href="/accounts">подключите</a>.</p>{% endif %}
-</article>
-
-<div class="grid">
-<article>
-  <header><strong>Из CSV</strong></header>
+  </section>
+  <section role="tabpanel" data-panel="csv" hidden>
   <form method="post" action="/segments/{{ seg.id }}/import-csv" enctype="multipart/form-data">
     <input type="file" name="file" accept=".csv,text/csv" required>
     <input name="tag" placeholder="Тег для всех строк (необязательно)">
     <button>Загрузить в сегмент</button>
   </form>
   <small class="muted">Колонки: <code>username</code>, <code>phone</code>, <code>user_id</code>, <code>first_name</code>, <code>last_name</code>, <code>tags</code> + любые свои (станут переменными шаблона). Дубликаты объединяются с общей базой.</small>
-</article>
-<article>
-  <header><strong>Из Telegram</strong></header>
+  </section>
+  <section role="tabpanel" data-panel="contacts" hidden>
   {% if accounts %}
   <form method="post" action="/segments/{{ seg.id }}/import-tg">
     <select name="account_id">{% for a in accounts %}<option value="{{ a.id }}">{{ a.label or a.first_name or ('#' ~ a.id) }}</option>{% endfor %}</select>
@@ -58,16 +79,15 @@
   </form>
   <small class="muted">Эти люди уже знают аккаунт и закрепляются за ним.</small>
   {% else %}<p class="muted">Нет подключённых аккаунтов — <a href="/accounts">подключите</a>.</p>{% endif %}
-</article>
-<article>
-  <header><strong>По тегу</strong></header>
+  </section>
+  <section role="tabpanel" data-panel="tag" hidden>
   <form method="post" action="/segments/{{ seg.id }}/add-tag">
     <select name="tag" required><option value="">— тег —</option>{% for t in tags %}<option>{{ t }}</option>{% endfor %}</select>
     <button>Добавить</button>
   </form>
   <small class="muted">Все лиды общей базы с этим тегом.</small>
+  </section>
 </article>
-</div>
 
 <form method="get" class="grid">
   <input name="s" value="{{ s }}" placeholder="Поиск по имени / username / телефону">
@@ -100,19 +120,35 @@
 </details>
 {% endif %}
 <script>
-// Поиск по названию в списке своих групп: скрываем неподходящие и выбираем первую подходящую
+// Вкладки источников: выбранная запоминается, чтобы после загрузки остаться на ней
 (function(){
-  const q = document.getElementById('group-q'), sel = document.getElementById('group-sel'), cnt = document.getElementById('group-cnt');
-  if (!q || !sel) return;
+  const bar = document.querySelector('.src-tabs .tab-bar');
+  if (!bar) return;
+  const KEY = 'segment-src-tab';
+  function show(name) {
+    for (const b of bar.querySelectorAll('[data-tab]')) b.setAttribute('aria-selected', b.dataset.tab === name);
+    for (const p of document.querySelectorAll('.src-tabs [data-panel]')) p.hidden = p.dataset.panel !== name;
+    try { localStorage.setItem(KEY, name); } catch (e) {}
+  }
+  let saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) {}
+  show(bar.querySelector(`[data-tab="${saved}"]`) ? saved : 'groups');
+  bar.addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) show(b.dataset.tab); });
+})();
+// Поиск по названию в таблице групп: скрываем неподходящие строки, выбор переносим на первую видимую
+(function(){
+  const q = document.getElementById('group-q'), rows = document.getElementById('group-rows'), cnt = document.getElementById('group-cnt');
+  if (!q || !rows) return;
   q.addEventListener('input', () => {
     const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
     let shown = 0, first = null;
-    for (const o of sel.options) {
-      const ok = words.every(w => o.text.toLowerCase().includes(w));
-      o.hidden = !ok; o.disabled = !ok;
-      if (ok) { shown++; first = first || o; }
+    for (const tr of rows.rows) {
+      const ok = words.every(w => tr.dataset.title.includes(w));
+      tr.hidden = !ok;
+      if (ok) { shown++; first = first || tr; }
     }
-    if (sel.selectedOptions[0]?.disabled) sel.value = first ? first.value : '';
+    const checked = rows.querySelector('input:checked');
+    if ((!checked || checked.closest('tr').hidden) && first) first.querySelector('input').checked = true;
     cnt.textContent = words.length ? (shown ? `найдено: ${shown}` : 'ничего не найдено') : '';
   });
   q.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
