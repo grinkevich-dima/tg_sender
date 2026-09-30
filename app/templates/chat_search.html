@@ -88,10 +88,16 @@
 <tr {% if f.status=='rejected' %}style="opacity:.5"{% endif %}>
   <td><b>{{ f.title or '—' }}</b>
     <br><small>
-      {% if f.username %}<a href="https://t.me/{{ f.username }}" target="_blank" rel="noopener">t.me/{{ f.username }}</a>{% elif f.invite_link %}<a href="{{ f.invite_link }}" target="_blank" rel="noopener">приглашение</a>{% endif %}
-      {% if f.tg_id %}{% if f.username or f.invite_link %} · {% endif %}<a href="https://web.telegram.org/a/#{{ f.tg_id }}" target="_blank" rel="noopener">открыть ↗</a>{% endif %}
-      {% set app = tg_app_link(f.tg_id, f.username, f.last_message_id) %}{% if app %} · <a href="{{ app }}" title="Открыть в приложении Telegram">в приложении</a>{% endif %}
+      {% set links = [] %}
+      {% if f.username %}{% set _ = links.append('<a href="https://t.me/' ~ f.username ~ '" target="_blank" rel="noopener">t.me/' ~ f.username ~ '</a>') %}
+      {% elif f.invite_link %}{% set _ = links.append('<a href="' ~ f.invite_link ~ '" target="_blank" rel="noopener">приглашение</a>') %}
+      {% elif f.parent_username %}{% set _ = links.append('<a href="https://t.me/' ~ f.parent_username ~ '" target="_blank" rel="noopener" title="Группа обсуждения: откройте канал и нажмите «Комментарии»">через канал t.me/' ~ f.parent_username ~ '</a>') %}{% endif %}
+      {% if f.member and f.tg_id %}{% set _ = links.append('<a href="https://web.telegram.org/a/#' ~ f.tg_id ~ '" target="_blank" rel="noopener">открыть ↗</a>') %}{% endif %}
+      {% set app = tg_app_link(f.tg_id, f.username, f.last_message_id if f.member else none) %}
+      {% if app %}{% set _ = links.append('<a href="' ~ app ~ '" title="Открыть в приложении Telegram">в приложении</a>') %}{% endif %}
+      {{ links|join(' · ')|safe }}{% if not links %}<span class="muted" title="Нет username и аккаунт в группе не состоит">ссылки нет</span>{% endif %}
       {% if f.member %} · <span class="badge b-read">состою</span>{% endif %}
+      {% if f.via == 'discussion' and f.parent_title %}<br><span class="muted">обсуждение канала «{{ f.parent_title }}»</span>{% endif %}
     </small>
     {% if f.about %}<details><summary class="muted" style="font-size:.8em">описание</summary><small>{{ f.about }}</small></details>{% endif %}</td>
   <td>{{ f.members or '—' }}</td>

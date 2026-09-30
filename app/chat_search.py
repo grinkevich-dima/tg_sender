@@ -125,7 +125,7 @@ async def _evaluate(client, entity) -> dict:
 
 
 def _save(search: dict, query: str, via: str, *, tg_id=None, username=None, invite_link=None, title="",
-          info: dict | None = None) -> int:
+          info: dict | None = None, parent=None) -> int:
     """Добавляет или обновляет найденную группу и отмечает, каким запросом она найдена."""
     kws, stops = search["keywords"], search["stop_words"]
     row = (db.one("SELECT * FROM found_chats WHERE tg_id=%s", (tg_id,)) if tg_id else None) or \
@@ -137,6 +137,9 @@ def _save(search: dict, query: str, via: str, *, tg_id=None, username=None, invi
         fields["tg_id"] = tg_id
     if invite_link:
         fields["invite_link"] = invite_link
+    if parent is not None:          # канал, через который открывается группа обсуждения
+        fields["parent_username"] = getattr(parent, "username", None)
+        fields["parent_title"] = getattr(parent, "title", None)
     if info is not None:
         text = " ".join([title, info["about"], *info["texts"]])
         silent = (db.now_utc() - info["last_message_at"]).total_seconds() / 86400 if info["last_message_at"] else None
@@ -168,10 +171,11 @@ def _needs_check(tg_id: int) -> bool:
     return not row["checked_at"] or db.now_utc() - row["checked_at"] > RECHECK_AFTER
 
 
-async def _add_group(client, search, query, via, ch, st):
+async def _add_group(client, search, query, via, ch, st, parent=None):
     tg_id = utils.get_peer_id(ch)
     info = await _evaluate(client, ch) if _needs_check(tg_id) else None
-    _save(search, query, via, tg_id=tg_id, username=getattr(ch, "username", None), title=ch.title or "", info=info)
+    _save(search, query, via, tg_id=tg_id, username=getattr(ch, "username", None), title=ch.title or "", info=info,
+          parent=parent)
     st["found"] = db.val("SELECT COUNT(DISTINCT found_chat_id) FROM found_chat_hits WHERE search_id=%s", (search["id"],))
 
 
@@ -205,7 +209,7 @@ async def run_search(acc, search_id: int, st: dict) -> None:
                     linked = full.full_chat.linked_chat_id
                     group = next((c for c in full.chats if c.id == linked and getattr(c, "megagroup", False)), None)
                     if group:
-                        await _add_group(client, search, q, "discussion", group, st)
+                        await _add_group(client, search, q, "discussion", group, st, parent=chan)
                 st["done"] = i + 1
                 if i < len(queries) - 1:
                     await asyncio.sleep(random.uniform(*PAUSE))

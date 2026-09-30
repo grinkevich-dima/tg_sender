@@ -156,9 +156,14 @@ def test_page_and_statuses(fast):
     run(tgm.run_chat_search(sid, a))
     c = browser("admin")
     html = c.get("/chat-search").text
-    assert "Бизнес клуб Минск" in html and "https://t.me/biz_minsk" in html and "https://web.telegram.org/a/#-1000000000011" in html
-    assert "tg://resolve?domain=biz_minsk" in html
-    assert "tg://privatepost?channel=22&amp;post=1000" in html        # группа обсуждения без username
+    assert "Бизнес клуб Минск" in html and "https://t.me/biz_minsk" in html and "tg://resolve?domain=biz_minsk" in html
+    # аккаунт не состоит в группах — ссылок по ID (веб и приложение) нет: Telegram их не откроет
+    assert "web.telegram.org" not in html and "privatepost" not in html
+    # группа обсуждения без username — ссылка на её канал
+    assert "через канал t.me/biz_channel" in html and "обсуждение канала «Канал про бизнес»" in html
+    db.ex("INSERT INTO tg_dialogs(account_id, peer_id, title, kind) VALUES (%s, -1000000000022, 'x', 'group')", (a,))
+    html = c.get("/chat-search?status=all").text
+    assert "https://web.telegram.org/a/#-1000000000022" in html and "tg://privatepost?channel=22&post=1000" in html
     fid = db.val("SELECT id FROM found_chats WHERE username='biz_minsk'")
     c.post(f"/chat-search/found/{fid}/rejected")
     assert "Бизнес клуб Минск" not in c.get("/chat-search").text               # «в работе» без отклонённых
