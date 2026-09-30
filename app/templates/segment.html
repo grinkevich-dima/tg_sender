@@ -12,6 +12,28 @@
 <p><a href="/campaigns" role="button" class="outline" style="width:auto">➕ Кампания по этому сегменту</a>
   <a href="/leads?segment={{ seg.id }}" style="margin-left:1rem">открыть в «Лидах»</a></p>
 
+<article>
+  <header><strong>Из своей группы</strong> <small class="muted">· участники вебинаров и семинаров</small></header>
+  {% if groups %}
+  <form method="post" action="/segments/{{ seg.id }}/import-group" class="grid">
+    <select name="group" required>
+      {% for g in groups %}<option value="{{ g.account_id }}:{{ g.peer_id }}">{{ g.title }}{% if g.members %} · {{ g.members }} уч.{% endif %} — {{ g.acc_label }}</option>{% endfor %}
+    </select>
+    <input name="tag" placeholder="Тег, напр. «вебинар-октябрь» (необязательно)">
+    <button>Добавить участников</button>
+  </form>
+  <small class="muted">Показаны только группы, где аккаунт — создатель или админ. Повторная загрузка добавит только новых участников.
+    В шаблоне доступны <code>{group}</code> — название группы и <code>{joined}</code> — дата вступления.</small>
+  {% elif accounts %}<p class="muted">Своих групп пока не найдено — обновите список ниже.</p>{% endif %}
+  {% if accounts %}
+  <form method="post" action="/segments/{{ seg.id }}/refresh-groups" class="row-actions" style="margin-top:.5rem">
+    <select name="account_id" style="width:auto;display:inline-block">{% for a in accounts %}<option value="{{ a.id }}">{{ a.label or a.first_name or ('#' ~ a.id) }}</option>{% endfor %}</select>
+    <button class="outline">↻ Обновить список своих групп</button>
+  </form>
+  {% for aid, st in groups_state.items() %}<small class="muted">Аккаунт #{{ aid }}: {{ st.step }}{% if st.step == 'готово' %} · своих групп: {{ st.groups }}{% endif %}</small><br>{% endfor %}
+  {% else %}<p class="muted">Нет подключённых аккаунтов — <a href="/accounts">подключите</a>.</p>{% endif %}
+</article>
+
 <div class="grid">
 <article>
   <header><strong>Из CSV</strong></header>

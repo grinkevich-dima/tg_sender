@@ -44,7 +44,7 @@
 | `campaign_steps` | текст шага (сейчас шаг 1; дожимы — следующий этап) |
 | `campaign_leads` | лид в кампании: аккаунт, состояние, свой текст из xlsx, тема форума, поля файла для фильтров, ошибка, время отправки/прочтения/ответа |
 | `messages` | вся переписка: исходящие из кампаний и входящие ответы |
-| `tg_dialogs` | снимок диалогов аккаунта: поиск чатов по названию, «есть ли переписка» |
+| `tg_dialogs` | снимок диалогов аккаунта: поиск чатов по названию, «есть ли переписка», свои группы (`is_admin`, `members`) |
 | `settings` | правила команды: стоп-слова, `recontact_days` |
 | `event_log` | журнал |
 
@@ -91,7 +91,7 @@
 | Команда | `/users`, `/users/create`, `/users/{id}/toggle`, `/users/{id}/password` |
 | Аккаунты | `/accounts`, `/accounts/create`, `/accounts/{id}` (настройки), `/accounts/{id}/login`, `/phone`, `/code`, `/password`, `/qr`, `/qr/status`, `/qr/done`, `/logout`, `/pause`, `/resume`, `/import`, `/delete` |
 | Лиды | `/leads`, `/leads/import-csv`, `/leads/{id}/optout`, `/leads/delete` |
-| Сегменты | `/segments`, `/segments/create`, `/segments/{id}`, `/import-csv`, `/import-tg`, `/add-tag`, `/remove/{lead_id}`, `/edit`, `/delete` |
+| Сегменты | `/segments`, `/segments/create`, `/segments/{id}`, `/import-csv`, `/import-tg`, `/add-tag`, `/refresh-groups`, `/import-group`, `/remove/{lead_id}`, `/edit`, `/delete` |
 | Шаблоны | `/templates`, `/templates/save`, `/templates/{id}/test`, `/templates/{id}/delete` |
 | Кампании | `/campaigns`, `/campaigns/create`, `/campaigns/upload`, `/campaigns/{id}`, `/enqueue`, `/accounts`, `/{start\|pause\|unqueue\|retry\|prepare\|delete}`, `/prepare-status`, `/export.csv`; строки — `/campaigns/row/{id}/{send\|skip\|reset}` |
 | Прочее | `/` (дашборд), `/reads/refresh`, `/settings` (правила), `/log` |

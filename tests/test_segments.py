@@ -81,3 +81,78 @@ def test_segment_csv_upload_via_panel():
     assert r.status_code == 303 and segments.size(sid) == 2
     assert "Анна" in c.get(f"/segments/{sid}").text
     assert "Борис" in c.get(f"/leads?segment={sid}").text
+
+
+# ---- свои группы ----
+def _dialog(peer_id, title, *, creator=False, admin=False, group=True, members=None):
+    ent = types.SimpleNamespace(id=abs(peer_id), creator=creator, admin_rights=object() if admin else None,
+                                participants_count=members)
+    return types.SimpleNamespace(id=peer_id, name=title, is_user=False, is_group=group, is_channel=not group,
+                                 message=object(), entity=ent)
+
+
+def _member(uid, first, joined=None, bot=False):
+    from datetime import datetime, timezone
+    return types.SimpleNamespace(id=uid, username=f"u{uid}", phone=None, first_name=first, last_name=None, bot=bot,
+                                 deleted=False, is_self=False,
+                                 participant=types.SimpleNamespace(date=joined or datetime(2026, 9, 20, tzinfo=timezone.utc)))
+
+
+class GroupClient(FakeClient):
+    members = {-1001: [_member(91, "Ира"), _member(92, "Олег"), _member(93, "Бот", bot=True)],
+               -1002: [_member(94, "Чужой")]}
+
+    async def iter_dialogs(self, limit=None):
+        yield _dialog(-1001, "Вебинар: маркетинг", creator=True, members=3)
+        yield _dialog(-1002, "Чужой чат")                        # просто участник
+        yield _dialog(-1003, "Канал", admin=True, group=False)   # канал — не группа
+        yield _dialog(-1004, "Семинар", admin=True)
+
+    async def iter_participants(self, peer):
+        for m in self.members.get(peer, []):
+            yield m
+
+
+def test_own_groups_found_and_members_imported():
+    u = make_user()
+    a = make_account(u["id"], client=GroupClient())
+    run(tgm.refresh_groups(a))
+    assert tgm.groups_state[a] == {"running": False, "step": "готово", "groups": 2}
+    own = {r["title"] for r in db.q("SELECT title FROM tg_dialogs WHERE account_id=%s AND is_admin", (a,))}
+    assert own == {"Вебинар: маркетинг", "Семинар"}
+
+    sid = segments.create("Октябрьский вебинар", "", u["id"])
+    assert run(tgm.get(a).import_group_members(-1001, sid, "вебинар")) == (2, 2, 2)   # бот не попал
+    ira = db.one("SELECT * FROM leads WHERE tg_id=91")
+    assert ira["extra"] == {"group": "Вебинар: маркетинг", "joined": "20.09.2026"}
+    assert ira["owner_account_id"] == a and ira["tags"] == ["вебинар"]
+    assert run(tgm.get(a).import_group_members(-1001, sid)) == (2, 0, 0)              # повтор — без дублей
+    # переменные попадают в текст
+    from app.templating import render
+    assert render("{first_name}, спасибо, что пришли в «{group}»!", db.lead_vars(ira)) == \
+        "Ира, спасибо, что пришли в «Вебинар: маркетинг»!"
+
+
+def test_members_of_foreign_group_are_refused():
+    u = make_user()
+    a = make_account(u["id"], client=GroupClient())
+    run(tgm.refresh_groups(a))
+    sid = segments.create("x", "", u["id"])
+    import pytest
+    with pytest.raises(ValueError, match="создатель или админ"):
+        run(tgm.get(a).import_group_members(-1002, sid))
+    assert segments.size(sid) == 0
+
+
+def test_import_group_via_panel_checks_account_owner():
+    admin = make_user("admin")
+    make_user("anna", "manager")
+    a = make_account(admin["id"], client=GroupClient())
+    run(tgm.refresh_groups(a))
+    sid = segments.create("x", "", admin["id"])
+    browser("anna").post(f"/segments/{sid}/import-group", data={"group": f"{a}:-1001"})
+    assert segments.size(sid) == 0                     # чужой аккаунт менеджеру недоступен
+    c = browser("admin")
+    assert "Вебинар: маркетинг" in c.get(f"/segments/{sid}").text
+    c.post(f"/segments/{sid}/import-group", data={"group": f"{a}:-1001"})
+    assert segments.size(sid) == 2

@@ -266,20 +266,79 @@ class AccountClient:
             finally:
                 self.client.flood_sleep_threshold = old_threshold
 
+    def _save_dialog(self, d) -> bool:
+        """Запоминает диалог в tg_dialogs. Возвращает True, если это личная переписка."""
+        kind = "user" if d.is_user else ("channel" if d.is_channel and not d.is_group else "group")
+        has_private = bool(d.is_user and d.message is not None)
+        e = d.entity
+        # своя группа: аккаунт её создал или в ней админ
+        is_admin = kind == "group" and bool(getattr(e, "creator", False) or getattr(e, "admin_rights", None))
+        db.ex("""INSERT INTO tg_dialogs(account_id, peer_id, title, kind, has_private, is_admin, members, updated_at)
+                 VALUES (%s,%s,%s,%s,%s,%s,%s, now()) ON CONFLICT (account_id, peer_id) DO UPDATE
+                 SET title=excluded.title, kind=excluded.kind, has_private=excluded.has_private,
+                     is_admin=excluded.is_admin, members=excluded.members, updated_at=now()""",
+              (self.id, d.id, d.name or "", kind, has_private, is_admin, getattr(e, "participants_count", None)))
+        return has_private
+
+    # ---------- свои группы ----------
+    async def refresh_groups(self, st: dict):
+        """Обновляет список диалогов, чтобы найти группы, где аккаунт создатель или админ."""
+        async with self.lock:
+            old_threshold = self.client.flood_sleep_threshold
+            self.client.flood_sleep_threshold = 300
+            try:
+                n = 0
+                async for d in self.client.iter_dialogs(limit=None):
+                    n += 1
+                    self._save_dialog(d)
+                    if n % 100 == 0:
+                        st["step"] = f"диалоги: {n} (Telegram может делать паузы, это нормально)"
+                st["groups"] = db.val("SELECT COUNT(*) FROM tg_dialogs WHERE account_id=%s AND is_admin", (self.id,))
+                st["step"] = "готово"
+            finally:
+                self.client.flood_sleep_threshold = old_threshold
+
+    async def import_group_members(self, peer_id: int, segment_id: int, tag: str = "") -> tuple[int, int, int]:
+        """Участники своей группы → лиды сегмента, закреплённые за этим аккаунтом.
+        Возвращает (всего участников, добавлено в сегмент, новых лидов в базе)."""
+        group = db.one("SELECT * FROM tg_dialogs WHERE account_id=%s AND peer_id=%s AND is_admin", (self.id, peer_id))
+        if not group:
+            raise ValueError("Можно брать участников только из групп, где аккаунт создатель или админ")
+        people = []
+        async with self.lock:
+            old_threshold = self.client.flood_sleep_threshold
+            self.client.flood_sleep_threshold = 300
+            try:
+                async for u in self.client.iter_participants(peer_id):
+                    if u.bot or u.deleted or u.is_self:
+                        continue
+                    joined = getattr(getattr(u, "participant", None), "date", None)
+                    people.append((u, joined))
+            finally:
+                self.client.flood_sleep_threshold = old_threshold
+        added = new = 0
+        with db.tx():
+            for u, joined in people:
+                extra = {"group": group["title"]}
+                if joined:
+                    extra["joined"] = joined.astimezone(db.now_local().tzinfo).strftime("%d.%m.%Y")
+                lid, created = leads.upsert_lead({"tg_id": u.id, "username": u.username, "phone": leads.norm_phone(u.phone),
+                                                  "first_name": u.first_name or "", "last_name": u.last_name or "",
+                                                  "source": "group"}, leads.split_tags(tag), extra, self.id)
+                added += leads.add_to_segment(segment_id, lid, "group")
+                new += created
+        db.log(f"Из группы «{group['title']}»: участников {len(people)}, в сегмент #{segment_id} добавлено {added}",
+               account_id=self.id)
+        return len(people), added, new
+
     async def _prepare(self, campaign_id: int, st: dict):
         who = self.display()
         n = 0
         private = set()
         async for d in self.client.iter_dialogs(limit=None):
             n += 1
-            kind = "user" if d.is_user else ("channel" if d.is_channel and not d.is_group else "group")
-            has_private = bool(d.is_user and d.message is not None)
-            if has_private:
+            if self._save_dialog(d):
                 private.add(d.entity.id)
-            db.ex("""INSERT INTO tg_dialogs(account_id, peer_id, title, kind, has_private, updated_at)
-                     VALUES (%s,%s,%s,%s,%s, now()) ON CONFLICT (account_id, peer_id) DO UPDATE
-                     SET title=excluded.title, kind=excluded.kind, has_private=excluded.has_private, updated_at=now()""",
-                  (self.id, d.id, d.name or "", kind, has_private))
             if n % 100 == 0:
                 st["step"] = f"{who}: диалоги {n} (Telegram может делать паузы, это нормально)"
         st["step"] = f"{who}: диалоги {n}"
@@ -393,6 +452,7 @@ class TgPool:
     def __init__(self):
         self.accounts: dict[int, AccountClient] = {}
         self.prepare_state: dict[int, dict] = {}   # campaign_id → ход «Найти получателей»
+        self.groups_state: dict[int, dict] = {}    # account_id → ход «Обновить список своих групп»
 
     def get(self, account_id: int) -> AccountClient:
         if account_id not in self.accounts:
@@ -417,12 +477,24 @@ class TgPool:
             except Exception:
                 pass
 
+    async def refresh_groups(self, account_id: int):
+        st = self.groups_state[account_id] = {"running": True, "step": "диалоги", "groups": 0}
+        try:
+            await self.get(account_id).refresh_groups(st)
+        except Exception as e:
+            st["step"] = (f"Telegram попросил подождать {e.seconds} сек — повторите позже"
+                          if isinstance(e, errors.FloodWaitError) else f"ошибка: {e}")
+            db.log(f"Список своих групп: {type(e).__name__}: {e}", "error", account_id)
+        finally:
+            st["running"] = False
+
     @property
     def preparing(self) -> bool:
         return any(st.get("running") for st in self.prepare_state.values())
 
     def preparing_account(self, account_id: int) -> bool:
-        return any(st.get("running") and account_id in st.get("accounts", ()) for st in self.prepare_state.values())
+        return (any(st.get("running") and account_id in st.get("accounts", ()) for st in self.prepare_state.values())
+                or bool(self.groups_state.get(account_id, {}).get("running")))
 
     async def prepare_campaign(self, campaign_id: int):
         from .campaigns import campaign_accounts

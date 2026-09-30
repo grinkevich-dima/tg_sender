@@ -1,4 +1,6 @@
 """Сегменты: создание, наполнение из CSV / Telegram / по тегу, состав."""
+import asyncio
+
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from psycopg.errors import UniqueViolation
 from telethon import errors
@@ -49,9 +51,14 @@ async def segment_view(request: Request, sid: int, s: str = "", p: int = 1):
                     WHERE {w} ORDER BY sl.added_at DESC, l.id DESC LIMIT %s OFFSET %s""",
                 params + [PER_PAGE, (max(p, 1) - 1) * PER_PAGE])
     stats = next((r for r in segments.listing() if r["id"] == sid), {})
+    accounts = [a for a in auth.user_accounts(u, only_active=True) if tgm.get(a["id"]).authorized]
+    acc_ids = [a["id"] for a in accounts]
+    groups = db.q("""SELECT d.*, COALESCE(NULLIF(a.label,''), a.first_name) acc_label FROM tg_dialogs d
+                     JOIN tg_accounts a ON a.id=d.account_id
+                     WHERE d.is_admin AND d.account_id = ANY(%s) ORDER BY d.title""", (acc_ids,))
     return page(request, "segment.html", seg=seg, rows=rows, total=total, s=s, p=p, per_page=PER_PAGE, stats=stats,
-                can_edit=_can_edit(u, seg), tags=leads.all_tags(),
-                accounts=[a for a in auth.user_accounts(u, only_active=True) if tgm.get(a["id"]).authorized])
+                can_edit=_can_edit(u, seg), tags=leads.all_tags(), accounts=accounts, groups=groups,
+                groups_state={a: tgm.groups_state.get(a) for a in acc_ids if tgm.groups_state.get(a)})
 
 
 @router.post("/{sid}/import-csv")
@@ -86,6 +93,43 @@ async def segment_import_tg(request: Request, sid: int, account_id: int = Form(.
     joined = segments.size(sid) - before
     db.log(f"Сегмент #{sid}: из Telegram ({source}) добавлено {joined}", account_id=account_id)
     return back(f"/segments/{sid}", msg=f"В сегмент добавлено {joined}. Эти лиды закреплены за аккаунтом, из которого импортированы")
+
+
+@router.post("/{sid}/refresh-groups")
+async def segment_refresh_groups(request: Request, sid: int, account_id: int = Form(...)):
+    acc = db.one("SELECT * FROM tg_accounts WHERE id=%s", (account_id,))
+    if not auth.can_use_account(user(request), acc) or not tgm.get(account_id).authorized:
+        return back(f"/segments/{sid}", err="Выберите свой подключённый аккаунт")
+    st = tgm.groups_state.get(account_id)
+    if not (st and st.get("running")):
+        asyncio.create_task(tgm.refresh_groups(account_id))
+    return back(f"/segments/{sid}", msg="Ищу группы, где аккаунт создатель или админ… Обновите страницу через минуту")
+
+
+@router.post("/{sid}/import-group")
+async def segment_import_group(request: Request, sid: int, group: str = Form(...), tag: str = Form("")):
+    if not segments.get(sid):
+        return back("/segments", err="Сегмент не найден")
+    try:
+        account_id, peer_id = (int(x) for x in group.split(":"))
+    except ValueError:
+        return back(f"/segments/{sid}", err="Выберите группу")
+    acc = db.one("SELECT * FROM tg_accounts WHERE id=%s", (account_id,))
+    client = tgm.get(account_id)
+    if not auth.can_use_account(user(request), acc) or not client.authorized:
+        return back(f"/segments/{sid}", err="Выберите группу своего подключённого аккаунта")
+    if tgm.preparing_account(account_id):
+        return back(f"/segments/{sid}", err="Аккаунт сейчас занят поиском — повторите через минуту")
+    try:
+        total, added, new = await client.import_group_members(peer_id, sid, tag)
+    except ValueError as e:
+        return back(f"/segments/{sid}", err=str(e))
+    except errors.FloodWaitError as e:
+        return back(f"/segments/{sid}", err=f"Telegram просит подождать {e.seconds} сек")
+    except errors.RPCError as e:
+        return back(f"/segments/{sid}", err=f"Не удалось получить участников: {e}")
+    return back(f"/segments/{sid}", msg=f"Участников в группе: {total}. Добавлено в сегмент: {added} (новых в базе {new}). "
+                                        "В шаблоне доступны {group} и {joined}")
 
 
 @router.post("/{sid}/add-tag")
