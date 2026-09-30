@@ -13,7 +13,8 @@
 <form method="post" action="/campaigns/create">
   <input name="name" placeholder="Название, напр. «Осенняя акция»" required>
   <select name="template_id" required><option value="">— шаблон —</option>{% for t in tpls %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}</select>
-  <select name="tag"><option value="">Все лиды</option>{% for t in tags %}<option value="{{ t }}">Тег: {{ t }}</option>{% endfor %}</select>
+  <select name="segment_id"><option value="">Все лиды</option>{% for s in segs %}<option value="{{ s.id }}">Сегмент: {{ s.name }}</option>{% endfor %}</select>
+  <select name="tag"><option value="">без фильтра по тегу</option>{% for t in tags %}<option value="{{ t }}">Тег: {{ t }}</option>{% endfor %}</select>
   {{ account_picker() }}
   <label><input type="checkbox" name="start" checked> Запустить сразу</label>
   <button>Создать</button>

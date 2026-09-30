@@ -31,6 +31,7 @@
 
 <form method="get" class="grid">
   <input name="s" value="{{ s }}" placeholder="Поиск по имени / username / телефону / названию">
+  <select name="segment"><option value="0">Все сегменты</option>{% for sg in segs %}<option value="{{ sg.id }}" {% if sg.id==segment %}selected{% endif %}>{{ sg.name }}</option>{% endfor %}</select>
   <select name="tag"><option value="">Все теги</option>{% for t in tags %}<option {% if t==tag %}selected{% endif %}>{{ t }}</option>{% endfor %}</select>
   <select name="owner">
     <option value="">Все аккаунты</option>
@@ -57,7 +58,7 @@
 </tr>
 {% endfor %}
 </tbody></table>
-{% if total > p*per_page %}<a href="?s={{ s }}&tag={{ tag }}&owner={{ owner }}&p={{ p+1 }}">Следующая страница →</a>{% endif %}
+{% if total > p*per_page %}<a href="?s={{ s }}&tag={{ tag }}&owner={{ owner }}&segment={{ segment }}&p={{ p+1 }}">Следующая страница →</a>{% endif %}
 
 {% if is_admin %}
 <details><summary class="muted">Удаление лидов</summary>

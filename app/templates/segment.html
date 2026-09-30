@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<h3>{{ seg.name }} <small class="muted" style="font-size:.6em">· {{ seg.author or '' }}</small></h3>
+{% if seg.description %}<p class="muted">{{ seg.description }}</p>{% endif %}
+
+<div class="grid-stats">
+  <div class="stat"><small>Всего</small><b>{{ stats.total or 0 }}</b></div>
+  <div class="stat"><small>Можно писать</small><b>{{ stats.ready or 0 }}</b><small>люди, не отписаны</small></div>
+  <div class="stat"><small>Уже писали</small><b>{{ stats.contacted or 0 }}</b></div>
+  <div class="stat"><small>Отписаны</small><b>{{ stats.opted_out or 0 }}</b></div>
+</div>
+<p><a href="/campaigns" role="button" class="outline" style="width:auto">➕ Кампания по этому сегменту</a>
+  <a href="/leads?segment={{ seg.id }}" style="margin-left:1rem">открыть в «Лидах»</a></p>
+
+<div class="grid">
+<article>
+  <header><strong>Из CSV</strong></header>
+  <form method="post" action="/segments/{{ seg.id }}/import-csv" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".csv,text/csv" required>
+    <input name="tag" placeholder="Тег для всех строк (необязательно)">
+    <button>Загрузить в сегмент</button>
+  </form>
+  <small class="muted">Колонки: <code>username</code>, <code>phone</code>, <code>user_id</code>, <code>first_name</code>, <code>last_name</code>, <code>tags</code> + любые свои (станут переменными шаблона). Дубликаты объединяются с общей базой.</small>
+</article>
+<article>
+  <header><strong>Из Telegram</strong></header>
+  {% if accounts %}
+  <form method="post" action="/segments/{{ seg.id }}/import-tg">
+    <select name="account_id">{% for a in accounts %}<option value="{{ a.id }}">{{ a.label or a.first_name or ('#' ~ a.id) }}</option>{% endfor %}</select>
+    <select name="source"><option value="contacts">Записная книжка</option><option value="dialogs">Все, с кем есть личная переписка</option></select>
+    <button>Добавить</button>
+  </form>
+  <small class="muted">Эти люди уже знают аккаунт и закрепляются за ним.</small>
+  {% else %}<p class="muted">Нет подключённых аккаунтов — <a href="/accounts">подключите</a>.</p>{% endif %}
+</article>
+<article>
+  <header><strong>По тегу</strong></header>
+  <form method="post" action="/segments/{{ seg.id }}/add-tag">
+    <select name="tag" required><option value="">— тег —</option>{% for t in tags %}<option>{{ t }}</option>{% endfor %}</select>
+    <button>Добавить</button>
+  </form>
+  <small class="muted">Все лиды общей базы с этим тегом.</small>
+</article>
+</div>
+
+<form method="get" class="grid">
+  <input name="s" value="{{ s }}" placeholder="Поиск по имени / username / телефону">
+  <button class="outline">Найти</button>
+</form>
+<p class="muted">В сегменте: {{ total }}</p>
+<table>
+<thead><tr><th>Лид</th><th>Контакты</th><th>Аккаунт</th><th>Писали</th><th>Откуда</th><th></th></tr></thead>
+{% for l in rows %}
+<tr {% if l.opted_out_at %}style="opacity:.5"{% endif %}>
+  <td>{{ l.title or ((l.first_name ~ ' ' ~ l.last_name)|trim) or '—' }} <small class="muted">{{ KIND_RU[l.kind] }}</small>
+      {% if l.opted_out_at %}<br><span class="badge b-skipped">отписан</span>{% endif %}</td>
+  <td><small>{% if l.username %}@{{ l.username }}<br>{% endif %}{{ l.phone or '' }}</small></td>
+  <td><small>{{ l.owner_label or l.owner_first or '—' }}</small></td>
+  <td><small>{{ l.last_out|dt if l.last_out else '' }}</small></td>
+  <td><small>{{ l.seg_source or '' }} · {{ l.added_at|dt }}</small></td>
+  <td class="row-actions">{% if can_edit %}<form method="post" action="/segments/{{ seg.id }}/remove/{{ l.id }}"><button class="outline secondary" title="Убрать из сегмента (из базы не удаляется)">✕</button></form>{% endif %}</td>
+</tr>
+{% else %}<tr><td colspan="6" class="muted">Сегмент пуст — наполните его формами выше</td></tr>{% endfor %}
+</table>
+{% if total > p*per_page %}<a href="?s={{ s }}&p={{ p+1 }}">Следующая страница →</a>{% endif %}
+
+{% if can_edit %}
+<details><summary class="muted">Переименовать или удалить сегмент</summary>
+<form method="post" action="/segments/{{ seg.id }}/edit" class="grid">
+  <input name="name" value="{{ seg.name }}" required><input name="description" value="{{ seg.description }}">
+  <button class="outline">Сохранить</button>
+</form>
+<form method="post" action="/segments/{{ seg.id }}/delete" onsubmit="return confirm('Удалить сегмент? Лиды останутся в общей базе')"><button class="secondary" style="width:auto">Удалить сегмент</button></form>
+</details>
+{% endif %}
+{% endblock %}

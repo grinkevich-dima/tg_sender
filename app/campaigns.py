@@ -206,12 +206,15 @@ def _insert_rows(cid: int, rows: list, cmap: dict, texts: dict) -> tuple[int, in
 
 # ---------- кампания по шаблону ----------
 def create_from_template(name: str, body: str, user_id: int, account_ids: list[int], tag: str = "",
-                         start: bool = False) -> tuple[int, int, int]:
-    """Лиды (все или по тегу, кроме отписавшихся) → кампания. Возвращает (id, в очереди, пропущено)."""
+                         start: bool = False, segment_id: int | None = None) -> tuple[int, int, int]:
+    """Лиды (все, по тегу или из сегмента, кроме отписавшихся) → кампания. Возвращает (id, в очереди, пропущено)."""
     where, params = ["opted_out_at IS NULL", "kind='person'"], []
     if tag:
         where.append("%s = ANY(tags)")
         params.append(tag)
+    if segment_id:
+        where.append("id IN (SELECT lead_id FROM segment_leads WHERE segment_id=%s)")
+        params.append(segment_id)
     ids = [r["id"] for r in db.q(f"SELECT id FROM leads WHERE {' AND '.join(where)} ORDER BY id", params)]
     with db.tx():
         cid = db.ex("""INSERT INTO campaigns(name, source, created_by, status, started_at)

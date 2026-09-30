@@ -186,19 +186,19 @@ class AccountClient:
         db.log("Выход из аккаунта", "warn", self.id)
 
     # ---------- импорт лидов ----------
-    async def import_contacts(self, tag: str = "") -> int:
+    async def import_contacts(self, tag: str = "", segment_id: int | None = None) -> int:
         async with self.lock:
             res = await self.client(GetContactsRequest(hash=0))
-        return leads.import_tg_users([u for u in res.users if not u.bot and not u.deleted], tag, self.id)
+        return leads.import_tg_users([u for u in res.users if not u.bot and not u.deleted], tag, self.id, segment_id)
 
-    async def import_dialogs(self, tag: str = "", limit: int = 500) -> int:
+    async def import_dialogs(self, tag: str = "", limit: int = 500, segment_id: int | None = None) -> int:
         users = []
         async with self.lock:
             async for d in self.client.iter_dialogs(limit=limit):
                 e = d.entity
                 if isinstance(e, User) and not e.bot and not e.deleted and not e.is_self and e.id != 777000:
                     users.append(e)
-        return leads.import_tg_users(users, tag, self.id)
+        return leads.import_tg_users(users, tag, self.id, segment_id)
 
     # ---------- поиск адресата ----------
     @staticmethod

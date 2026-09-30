@@ -83,7 +83,16 @@ def all_tags() -> list[str]:
     return [r["t"] for r in db.q("SELECT DISTINCT unnest(tags) t FROM leads ORDER BY 1")]
 
 
-def import_csv(raw: bytes, tag: str = "", owner_account_id: int | None = None) -> tuple[int, int, int]:
+def add_to_segment(segment_id: int | None, lead_id: int, source: str) -> bool:
+    """Добавляет лида в сегмент; False — уже был там."""
+    if not segment_id:
+        return False
+    return bool(db.changed("""INSERT INTO segment_leads(segment_id, lead_id, source) VALUES (%s, %s, %s)
+                              ON CONFLICT DO NOTHING""", (segment_id, lead_id, source)))
+
+
+def import_csv(raw: bytes, tag: str = "", owner_account_id: int | None = None,
+               segment_id: int | None = None) -> tuple[int, int, int]:
     text = raw.decode("utf-8-sig", errors="replace")
     try:
         dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
@@ -104,21 +113,23 @@ def import_csv(raw: bytes, tag: str = "", owner_account_id: int | None = None) -
                 bad += 1
                 continue
             extra = {k: v for k, v in row.items() if k and v}
-            _, created = upsert_lead({"tg_id": uid, "username": uname, "phone": phone, "first_name": first,
-                                      "last_name": last, "source": "csv"}, tags, extra, owner_account_id)
+            lid, created = upsert_lead({"tg_id": uid, "username": uname, "phone": phone, "first_name": first,
+                                        "last_name": last, "source": "csv"}, tags, extra, owner_account_id)
+            add_to_segment(segment_id, lid, "csv")
             added += created
             updated += not created
     return added, updated, bad
 
 
-def import_tg_users(users, tag: str, account_id: int) -> int:
+def import_tg_users(users, tag: str, account_id: int, segment_id: int | None = None) -> int:
     """Контакты/собеседники аккаунта → лиды, закреплённые за этим аккаунтом (он их уже знает)."""
     n = 0
     with db.tx():
         for u in users:
-            _, created = upsert_lead({"tg_id": u.id, "username": u.username, "phone": norm_phone(u.phone),
-                                      "first_name": u.first_name or "", "last_name": u.last_name or "",
-                                      "source": "telegram"}, split_tags(tag), None, account_id)
+            lid, created = upsert_lead({"tg_id": u.id, "username": u.username, "phone": norm_phone(u.phone),
+                                        "first_name": u.first_name or "", "last_name": u.last_name or "",
+                                        "source": "telegram"}, split_tags(tag), None, account_id)
+            add_to_segment(segment_id, lid, "telegram")
             n += created
     return n
 

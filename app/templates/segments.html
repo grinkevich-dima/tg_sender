@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<article>
+<header><strong>Новый сегмент</strong></header>
+<form method="post" action="/segments/create" class="grid">
+  <input name="name" placeholder="Название, напр. «Собственники салонов, Минск»" required>
+  <input name="description" placeholder="Кто это и почему им пишем (необязательно)">
+  <button>Создать</button>
+</form>
+<small class="muted">Сегмент — список лидов для кампаний. Наполняется из CSV, из контактов и личных диалогов своего аккаунта Telegram или по тегу.
+Один лид может быть в нескольких сегментах; отписка и закрепление за аккаунтом действуют везде.</small>
+</article>
+<table>
+<thead><tr><th>Сегмент</th><th>Всего</th><th>Можно писать</th><th>Уже писали</th><th>Отписаны</th><th>Автор</th><th>Создан</th></tr></thead>
+{% for s in rows %}
+<tr><td><a href="/segments/{{ s.id }}"><b>{{ s.name }}</b></a>{% if s.description %}<br><small class="muted">{{ s.description }}</small>{% endif %}</td>
+<td>{{ s.total }}</td><td>{{ s.ready }}</td><td>{{ s.contacted }}</td><td>{{ s.opted_out }}</td>
+<td><small>{{ s.author or '' }}</small></td><td><small>{{ s.created_at|dt('%d.%m.%Y') }}</small></td></tr>
+{% else %}<tr><td colspan="7" class="muted">Пока нет сегментов</td></tr>{% endfor %}
+</table>
+{% endblock %}

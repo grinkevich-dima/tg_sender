@@ -21,7 +21,8 @@
 | `app/db.py` | пул соединений psycopg 3, помощники `q/one/val/ex/changed`, транзакции `tx()` (вложенные — точки сохранения), миграции |
 | `app/migrations/*.sql` | схема базы; применяются по порядку при старте |
 | `app/auth.py` | пользователи и пароли (scrypt), роли, cookie-сессия, защита от CSRF, перенос старой сессии |
-| `app/leads.py` | поиск дубликатов, импорт CSV и из Telegram, стоп-слова, отписка |
+| `app/leads.py` | поиск дубликатов, импорт CSV и из Telegram (с добавлением в сегмент), стоп-слова, отписка |
+| `app/segments.py` | сегменты: создание, наполнение по тегу, счётчики |
 | `app/campaigns.py` | импорт xlsx, кампании по шаблону, фильтры, очередь, распределение лидов по аккаунтам |
 | `app/tg.py` | `AccountClient`: вход (код, 2FA, QR), поиск адресата, «Найти получателей», обработчики событий; `TgPool` — все аккаунты |
 | `app/worker.py` | отправка: цикл на каждый аккаунт, лимиты, прогрев, паузы, обработка ошибок Telegram |
@@ -37,6 +38,7 @@
 | `tg_accounts` | аккаунты Telegram: владелец-менеджер, данные профиля, статус, лимиты, прогрев, рабочие часы, `paused_until` |
 | `leads` | люди и чаты: `tg_id`, `username`, `phone` (уникальны), имя, `extra` (переменные), `tags[]`, **`owner_account_id`**, `opted_out_at` |
 | `templates` | библиотека текстов |
+| `segments`, `segment_leads` | сегменты и их состав (откуда добавлен лид: csv / telegram / tag) |
 | `campaigns` | кампании: источник (`template`/`xlsx`), статус, автор |
 | `campaign_accounts` | с каких аккаунтов идёт кампания |
 | `campaign_steps` | текст шага (сейчас шаг 1; дожимы — следующий этап) |
@@ -89,6 +91,7 @@
 | Команда | `/users`, `/users/create`, `/users/{id}/toggle`, `/users/{id}/password` |
 | Аккаунты | `/accounts`, `/accounts/create`, `/accounts/{id}` (настройки), `/accounts/{id}/login`, `/phone`, `/code`, `/password`, `/qr`, `/qr/status`, `/qr/done`, `/logout`, `/pause`, `/resume`, `/import`, `/delete` |
 | Лиды | `/leads`, `/leads/import-csv`, `/leads/{id}/optout`, `/leads/delete` |
+| Сегменты | `/segments`, `/segments/create`, `/segments/{id}`, `/import-csv`, `/import-tg`, `/add-tag`, `/remove/{lead_id}`, `/edit`, `/delete` |
 | Шаблоны | `/templates`, `/templates/save`, `/templates/{id}/test`, `/templates/{id}/delete` |
 | Кампании | `/campaigns`, `/campaigns/create`, `/campaigns/upload`, `/campaigns/{id}`, `/enqueue`, `/accounts`, `/{start\|pause\|unqueue\|retry\|prepare\|delete}`, `/prepare-status`, `/export.csv`; строки — `/campaigns/row/{id}/{send\|skip\|reset}` |
 | Прочее | `/` (дашборд), `/reads/refresh`, `/settings` (правила), `/log` |

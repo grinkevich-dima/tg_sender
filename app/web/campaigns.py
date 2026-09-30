@@ -43,6 +43,7 @@ async def campaigns_page(request: Request):
                     FROM campaigns c LEFT JOIN users u ON u.id=c.created_by LEFT JOIN campaign_leads cl ON cl.campaign_id=c.id
                     WHERE {w} GROUP BY c.id, u.name ORDER BY c.id DESC""", p)
     return page(request, "campaigns.html", rows=rows, tpls=db.q("SELECT id, name FROM templates ORDER BY id DESC"),
+                segs=db.q("SELECT id, name FROM segments ORDER BY name"),
                 tags=leads.all_tags(), accounts=auth.user_accounts(u, only_active=True),
                 recontact_days=cmp.recontact_days())
 
@@ -60,7 +61,7 @@ async def campaigns_create(request: Request):
         return back("/campaigns", err="Выберите хотя бы один свой подключённый аккаунт")
     try:
         cid, queued, skipped = cmp.create_from_template(name, tpl["body"], u["id"], accs, (form.get("tag") or "").strip(),
-                                                        bool(form.get("start")))
+                                                        bool(form.get("start")), int(form.get("segment_id") or 0) or None)
     except ValueError as e:
         return back("/campaigns", err=str(e))
     worker.wake()

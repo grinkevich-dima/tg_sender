@@ -9,7 +9,7 @@ PER_PAGE = 100
 
 
 @router.get("")
-async def leads_page(request: Request, tag: str = "", s: str = "", owner: str = "", p: int = 1):
+async def leads_page(request: Request, tag: str = "", s: str = "", owner: str = "", segment: int = 0, p: int = 1):
     u = user(request)
     where, params = ["true"], []
     if tag:
@@ -19,6 +19,9 @@ async def leads_page(request: Request, tag: str = "", s: str = "", owner: str = 
         where.append("(l.first_name ILIKE %s OR l.last_name ILIKE %s OR l.username ILIKE %s OR l.phone ILIKE %s "
                      "OR l.title ILIKE %s)")
         params += [f"%{s}%"] * 5
+    if segment:
+        where.append("l.id IN (SELECT lead_id FROM segment_leads WHERE segment_id=%s)")
+        params.append(segment)
     if owner == "mine":
         where.append("a.user_id=%s")
         params.append(u["id"])
@@ -34,7 +37,8 @@ async def leads_page(request: Request, tag: str = "", s: str = "", owner: str = 
                     (SELECT MAX(m.created_at) FROM messages m WHERE m.lead_id=l.id AND m.direction='out') last_out,
                     (SELECT MAX(m.created_at) FROM messages m WHERE m.lead_id=l.id AND m.direction='in') last_in
                     {base} ORDER BY l.id DESC LIMIT %s OFFSET %s""", params + [PER_PAGE, (max(p, 1) - 1) * PER_PAGE])
-    return page(request, "leads.html", rows=rows, total=total, tag=tag, s=s, owner=owner, p=p, per_page=PER_PAGE,
+    return page(request, "leads.html", rows=rows, total=total, tag=tag, s=s, owner=owner, segment=segment, p=p,
+                per_page=PER_PAGE, segs=db.q("SELECT id, name FROM segments ORDER BY name"),
                 tags=leads.all_tags(), accounts=auth.user_accounts(u, only_active=True),
                 all_accounts=db.q("SELECT id, label, first_name FROM tg_accounts WHERE tg_user_id IS NOT NULL ORDER BY id"))
 
