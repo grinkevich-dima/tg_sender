@@ -107,29 +107,54 @@ async def segment_refresh_groups(request: Request, sid: int, account_id: int = F
 
 
 @router.post("/{sid}/import-group")
-async def segment_import_group(request: Request, sid: int, group: str = Form(...), tag: str = Form("")):
+async def segment_import_group(request: Request, sid: int):
+    """Участники одной или нескольких отмеченных групп → сегмент. Группы обрабатываются по очереди;
+    если Telegram попросит подождать, останавливаемся и сообщаем, что успели."""
     if not segments.get(sid):
         return back("/segments", err="Сегмент не найден")
-    try:
-        account_id, peer_id = (int(x) for x in group.split(":"))
-    except ValueError:
-        return back(f"/segments/{sid}", err="Выберите группу")
-    acc = db.one("SELECT * FROM tg_accounts WHERE id=%s", (account_id,))
-    client = tgm.get(account_id)
-    if not auth.can_use_account(user(request), acc) or not client.authorized:
-        return back(f"/segments/{sid}", err="Выберите группу своего подключённого аккаунта")
-    if tgm.preparing_account(account_id):
-        return back(f"/segments/{sid}", err="Аккаунт сейчас занят поиском — повторите через минуту")
-    try:
-        total, added, new = await client.import_group_members(peer_id, sid, tag)
-    except ValueError as e:
-        return back(f"/segments/{sid}", err=str(e))
-    except errors.FloodWaitError as e:
-        return back(f"/segments/{sid}", err=f"Telegram просит подождать {e.seconds} сек")
-    except errors.RPCError as e:
-        return back(f"/segments/{sid}", err=f"Не удалось получить участников: {e}")
-    return back(f"/segments/{sid}", msg=f"Участников в группе: {total}. Добавлено в сегмент: {added} (новых в базе {new}). "
-                                        "В шаблоне доступны {group} и {joined}")
+    form = await request.form()
+    tag = (form.get("tag") or "").strip()
+    picked = []
+    for v in form.getlist("group"):
+        try:
+            picked.append(tuple(int(x) for x in v.split(":")))
+        except ValueError:
+            continue
+    if not picked:
+        return back(f"/segments/{sid}", err="Отметьте хотя бы одну группу")
+    u = user(request)
+    total = added = new = done = 0
+    problems = []
+    for i, (account_id, peer_id) in enumerate(picked):
+        acc = db.one("SELECT * FROM tg_accounts WHERE id=%s", (account_id,))
+        client = tgm.get(account_id)
+        title = db.val("SELECT title FROM tg_dialogs WHERE account_id=%s AND peer_id=%s", (account_id, peer_id)) or peer_id
+        if not auth.can_use_account(u, acc) or not client.authorized:
+            problems.append(f"«{title}»: группа не вашего подключённого аккаунта")
+            continue
+        if tgm.preparing_account(account_id):
+            problems.append(f"«{title}»: аккаунт занят поиском, повторите позже")
+            continue
+        try:
+            t, a, n = await client.import_group_members(peer_id, sid, tag)
+        except ValueError as e:
+            problems.append(f"«{title}»: {e}")
+            continue
+        except errors.FloodWaitError as e:
+            problems.append(f"Telegram попросил подождать {e.seconds} сек — остановился на «{title}», "
+                            f"не обработано групп: {len(picked) - i}")
+            break
+        except errors.RPCError as e:
+            problems.append(f"«{title}»: не удалось получить участников ({e})")
+            continue
+        total, added, new, done = total + t, added + a, new + n, done + 1
+        if i < len(picked) - 1:
+            await asyncio.sleep(1)       # не дёргаем Telegram подряд без паузы
+    msg = (f"Групп обработано: {done} из {len(picked)}. Участников: {total}, добавлено в сегмент: {added} "
+           f"(новых в базе {new}). В шаблоне доступны {{group}} и {{joined}}")
+    if problems:
+        return back(f"/segments/{sid}", msg=msg if done else "", err="; ".join(problems))
+    return back(f"/segments/{sid}", msg=msg)
 
 
 @router.post("/{sid}/add-tag")

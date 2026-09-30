@@ -147,3 +147,17 @@ def test_import_group_via_panel_checks_account_owner():
     assert "https://web.telegram.org/a/#-1001" in page_html and "https://t.me/webinar_mkt" in page_html
     c.post(f"/segments/{sid}/import-group", data={"group": f"{a}:-1001"})
     assert segments.size(sid) == 2
+
+
+def test_import_several_groups_at_once():
+    u = make_user("admin")
+    a = make_account(u["id"], client=GroupClient())
+    run(tgm.refresh_groups(a))
+    sid = segments.create("Несколько", "", u["id"])
+    r = browser("admin").post(f"/segments/{sid}/import-group", data={"group": [f"{a}:-1001", f"{a}:-1002"]},
+                              follow_redirects=False)
+    assert segments.size(sid) == 3                          # 2 + 1 участник, бот не считается
+    assert "обработано: 2 из 2" in __import__("urllib.parse").parse.unquote(r.headers["set-cookie"])
+    # пустой выбор — понятная ошибка, ничего не добавлено
+    browser("admin").post(f"/segments/{sid}/import-group", data={})
+    assert segments.size(sid) == 3

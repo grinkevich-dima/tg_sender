@@ -31,7 +31,7 @@
         <tbody id="group-rows">
         {% for g in groups %}
         <tr data-title="{{ g.title|lower }}">
-          <td><input type="radio" name="group" value="{{ g.account_id }}:{{ g.peer_id }}" id="g{{ loop.index }}" {% if loop.first %}checked{% endif %} required></td>
+          <td><input type="checkbox" name="group" value="{{ g.account_id }}:{{ g.peer_id }}" id="g{{ loop.index }}"></td>
           <td><label for="g{{ loop.index }}">{{ g.title }}</label></td>
           <td>{{ g.members or '—' }}</td>
           <td><small>{{ g.acc_label }}</small></td>
@@ -44,11 +44,15 @@
         </tbody>
       </table>
       </div>
-      <small class="muted" id="group-cnt"></small>
+      <div class="row-actions" style="margin-top:.4rem">
+        <button type="button" class="outline" id="group-all">Выбрать все найденные</button>
+        <button type="button" class="outline secondary" id="group-none">Снять выбор</button>
+        <small class="muted" id="group-cnt"></small> <small id="group-sel-cnt"></small>
+      </div>
     </div>
     <div class="grid" style="margin-top:.6rem">
       <input name="tag" placeholder="Тег, напр. «вебинар-октябрь» (необязательно)">
-      <button>Добавить участников выбранной группы</button>
+      <button id="group-submit" disabled>Добавить участников выбранных групп</button>
     </div>
   </form>
   <small class="muted">Повторная загрузка добавит только новых участников.
@@ -135,23 +139,39 @@
   show(bar.querySelector(`[data-tab="${saved}"]`) ? saved : 'groups');
   bar.addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) show(b.dataset.tab); });
 })();
-// Поиск по названию в таблице групп: скрываем неподходящие строки, выбор переносим на первую видимую
+// Таблица групп: поиск по названию, выбор нескольких, «выбрать все найденные»
 (function(){
-  const q = document.getElementById('group-q'), rows = document.getElementById('group-rows'), cnt = document.getElementById('group-cnt');
+  const q = document.getElementById('group-q'), rows = document.getElementById('group-rows');
   if (!q || !rows) return;
+  const cnt = document.getElementById('group-cnt'), selCnt = document.getElementById('group-sel-cnt'),
+        submit = document.getElementById('group-submit');
+  const boxes = () => [...rows.querySelectorAll('input[type=checkbox]')];
+  function updateSelected() {
+    const n = boxes().filter(b => b.checked).length;
+    selCnt.textContent = n ? `· выбрано: ${n}` : '';
+    submit.disabled = !n;
+    submit.textContent = n > 1 ? `Добавить участников ${n} групп` : 'Добавить участников выбранных групп';
+  }
   q.addEventListener('input', () => {
     const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
-    let shown = 0, first = null;
+    let shown = 0;
     for (const tr of rows.rows) {
-      const ok = words.every(w => tr.dataset.title.includes(w));
-      tr.hidden = !ok;
-      if (ok) { shown++; first = first || tr; }
+      tr.hidden = !words.every(w => tr.dataset.title.includes(w));
+      if (!tr.hidden) shown++;
     }
-    const checked = rows.querySelector('input:checked');
-    if ((!checked || checked.closest('tr').hidden) && first) first.querySelector('input').checked = true;
     cnt.textContent = words.length ? (shown ? `найдено: ${shown}` : 'ничего не найдено') : '';
   });
   q.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
+  document.getElementById('group-all').addEventListener('click', () => {
+    for (const b of boxes()) if (!b.closest('tr').hidden) b.checked = true;
+    updateSelected();
+  });
+  document.getElementById('group-none').addEventListener('click', () => {
+    for (const b of boxes()) b.checked = false;
+    updateSelected();
+  });
+  rows.addEventListener('change', updateSelected);
+  updateSelected();
 })();
 </script>
 {% endblock %}
