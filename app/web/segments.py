@@ -103,7 +103,7 @@ async def segment_refresh_groups(request: Request, sid: int, account_id: int = F
     st = tgm.groups_state.get(account_id)
     if not (st and st.get("running")):
         asyncio.create_task(tgm.refresh_groups(account_id))
-    return back(f"/segments/{sid}", msg="Ищу группы, где аккаунт создатель или админ… Обновите страницу через минуту")
+    return back(f"/segments/{sid}", msg="Ищу группы аккаунта… Обновите страницу через минуту")
 
 
 @router.post("/{sid}/import-group")

@@ -282,7 +282,7 @@ class AccountClient:
 
     # ---------- свои группы ----------
     async def refresh_groups(self, st: dict):
-        """Обновляет список диалогов, чтобы найти группы, где аккаунт создатель или админ."""
+        """Обновляет список диалогов, чтобы найти группы аккаунта."""
         async with self.lock:
             old_threshold = self.client.flood_sleep_threshold
             self.client.flood_sleep_threshold = 300
