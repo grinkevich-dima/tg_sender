@@ -159,3 +159,20 @@ def test_page_and_statuses(fast):
     make_user("anna", "manager")
     browser("anna").post("/chat-search/create", data={"keywords": "x", "account_id": a})
     assert db.val("SELECT COUNT(*) FROM chat_searches") == 1
+
+
+def test_create_with_empty_optional_fields(fast):
+    """Название, место и стоп-слова необязательны: пустые поля формы не должны давать ошибку."""
+    u = make_user("admin")
+    a = make_account(u["id"], client=SearchClient())
+    c = browser("admin")
+    r = c.post("/chat-search/create", data={"name": "", "keywords": "бизнес, предприниматель", "geo": "",
+                                            "stop_words": "", "account_id": a}, follow_redirects=False)
+    assert r.status_code == 303
+    assert db.one("SELECT name, keywords, geo FROM chat_searches") == \
+        {"name": "бизнес, предприниматель", "keywords": ["бизнес", "предприниматель"], "geo": []}
+    # пустые обязательные по смыслу поля — понятная ошибка, а не 422
+    for url, data in [("/chat-search/create", {"keywords": "", "account_id": a}),
+                      ("/chat-search/links", {"links": "", "account_id": a}),
+                      ("/chat-search/create", {"keywords": "x"})]:
+        assert c.post(url, data=data, follow_redirects=False).status_code == 303

@@ -65,8 +65,8 @@ async def search_page(request: Request, status: str = "active", search: int = 0,
 
 
 @router.post("/create")
-async def search_create(request: Request, name: str = Form(...), keywords: str = Form(...), geo: str = Form(""),
-                        stop_words: str = Form(""), account_id: int = Form(...)):
+async def search_create(request: Request, name: str = Form(""), keywords: str = Form(""), geo: str = Form(""),
+                        stop_words: str = Form(""), account_id: int = Form(0)):
     if not _account(request, account_id):
         return back("/chat-search", err="Выберите свой подключённый аккаунт")
     if _busy(account_id):
@@ -85,8 +85,8 @@ async def search_create(request: Request, name: str = Form(...), keywords: str =
 
 
 @router.post("/links")
-async def search_links(request: Request, links: str = Form(...), keywords: str = Form(""), stop_words: str = Form(""),
-                       account_id: int = Form(...)):
+async def search_links(request: Request, links: str = Form(""), keywords: str = Form(""), stop_words: str = Form(""),
+                       account_id: int = Form(0)):
     if not _account(request, account_id):
         return back("/chat-search", err="Выберите свой подключённый аккаунт")
     if _busy(account_id):
