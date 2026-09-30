@@ -478,7 +478,7 @@ class TgPool:
                 pass
 
     async def refresh_groups(self, account_id: int):
-        st = self.groups_state[account_id] = {"running": True, "step": "диалоги", "groups": 0}
+        st = self.groups_state = {"running": True, "step": "диалоги", "groups": 0}
         try:
             await self.get(account_id).refresh_groups(st)
         except Exception as e:
