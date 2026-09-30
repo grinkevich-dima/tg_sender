@@ -272,7 +272,7 @@ class AccountClient:
         has_private = bool(d.is_user and d.message is not None)
         e = d.entity
         # своя группа: аккаунт её создал или в ней админ
-        is_admin = kind == "group" and bool(getattr(e, "creator", False) or getattr(e, "admin_rights", None))
+        is_admin = kind == "group"
         db.ex("""INSERT INTO tg_dialogs(account_id, peer_id, title, kind, has_private, is_admin, members, updated_at)
                  VALUES (%s,%s,%s,%s,%s,%s,%s, now()) ON CONFLICT (account_id, peer_id) DO UPDATE
                  SET title=excluded.title, kind=excluded.kind, has_private=excluded.has_private,
@@ -293,7 +293,7 @@ class AccountClient:
                     self._save_dialog(d)
                     if n % 100 == 0:
                         st["step"] = f"диалоги: {n} (Telegram может делать паузы, это нормально)"
-                st["groups"] = db.val("SELECT COUNT(*) FROM tg_dialogs WHERE account_id=%s AND is_admin", (self.id,))
+                st["groups"] = db.val("SELECT COUNT(*) FROM tg_dialogs WHERE account_id=%s", (self.id,))
                 st["step"] = "готово"
             finally:
                 self.client.flood_sleep_threshold = old_threshold
@@ -301,9 +301,9 @@ class AccountClient:
     async def import_group_members(self, peer_id: int, segment_id: int, tag: str = "") -> tuple[int, int, int]:
         """Участники своей группы → лиды сегмента, закреплённые за этим аккаунтом.
         Возвращает (всего участников, добавлено в сегмент, новых лидов в базе)."""
-        group = db.one("SELECT * FROM tg_dialogs WHERE account_id=%s AND peer_id=%s AND is_admin", (self.id, peer_id))
+        group = db.one("SELECT * FROM tg_dialogs WHERE account_id=%s AND peer_id=%s", (self.id, peer_id))
         if not group:
-            raise ValueError("Можно брать участников только из групп, где аккаунт создатель или админ")
+            raise ValueError("Можно брать участников только из групп")
         people = []
         async with self.lock:
             old_threshold = self.client.flood_sleep_threshold
@@ -478,7 +478,7 @@ class TgPool:
                 pass
 
     async def refresh_groups(self, account_id: int):
-        st = self.groups_state = {"running": True, "step": "диалоги", "groups": 0}
+        st = self.groups_state[account_id] = {"running": True, "step": "диалоги", "groups": 0}
         try:
             await self.get(account_id).refresh_groups(st)
         except Exception as e:

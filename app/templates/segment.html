@@ -16,9 +16,13 @@
   <header><strong>Из своей группы</strong> <small class="muted">· участники вебинаров и семинаров</small></header>
   {% if groups %}
   <form method="post" action="/segments/{{ seg.id }}/import-group" class="grid">
-    <select name="group" required>
-      {% for g in groups %}<option value="{{ g.account_id }}:{{ g.peer_id }}">{{ g.title }}{% if g.members %} · {{ g.members }} уч.{% endif %} — {{ g.acc_label }}</option>{% endfor %}
-    </select>
+    <div>
+      <input type="search" id="group-q" placeholder="Поиск группы по названию…" autocomplete="off" style="margin-bottom:.3rem">
+      <select name="group" id="group-sel" required size="{{ [groups|length, 6]|min if groups|length > 1 else 1 }}">
+        {% for g in groups %}<option value="{{ g.account_id }}:{{ g.peer_id }}" {% if loop.first %}selected{% endif %}>{{ g.title }}{% if g.members %} · {{ g.members }} уч.{% endif %} — {{ g.acc_label }}</option>{% endfor %}
+      </select>
+      <small class="muted" id="group-cnt"></small>
+    </div>
     <input name="tag" placeholder="Тег, напр. «вебинар-октябрь» (необязательно)">
     <button>Добавить участников</button>
   </form>
@@ -95,4 +99,23 @@
 <form method="post" action="/segments/{{ seg.id }}/delete" onsubmit="return confirm('Удалить сегмент? Лиды останутся в общей базе')"><button class="secondary" style="width:auto">Удалить сегмент</button></form>
 </details>
 {% endif %}
+<script>
+// Поиск по названию в списке своих групп: скрываем неподходящие и выбираем первую подходящую
+(function(){
+  const q = document.getElementById('group-q'), sel = document.getElementById('group-sel'), cnt = document.getElementById('group-cnt');
+  if (!q || !sel) return;
+  q.addEventListener('input', () => {
+    const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+    let shown = 0, first = null;
+    for (const o of sel.options) {
+      const ok = words.every(w => o.text.toLowerCase().includes(w));
+      o.hidden = !ok; o.disabled = !ok;
+      if (ok) { shown++; first = first || o; }
+    }
+    if (sel.selectedOptions[0]?.disabled) sel.value = first ? first.value : '';
+    cnt.textContent = words.length ? (shown ? `найдено: ${shown}` : 'ничего не найдено') : '';
+  });
+  q.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
+})();
+</script>
 {% endblock %}

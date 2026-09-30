@@ -153,6 +153,7 @@ def test_import_group_via_panel_checks_account_owner():
     browser("anna").post(f"/segments/{sid}/import-group", data={"group": f"{a}:-1001"})
     assert segments.size(sid) == 0                     # чужой аккаунт менеджеру недоступен
     c = browser("admin")
-    assert "Вебинар: маркетинг" in c.get(f"/segments/{sid}").text
+    page_html = c.get(f"/segments/{sid}").text
+    assert "Вебинар: маркетинг" in page_html and 'id="group-q"' in page_html
     c.post(f"/segments/{sid}/import-group", data={"group": f"{a}:-1001"})
     assert segments.size(sid) == 2
