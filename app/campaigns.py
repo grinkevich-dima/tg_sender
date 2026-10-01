@@ -5,6 +5,7 @@
 """
 import random
 import re
+from datetime import timedelta
 
 from psycopg.errors import UniqueViolation
 
@@ -233,12 +234,52 @@ def step_body(campaign_id: int, position: int = 1) -> str | None:
     return db.val("SELECT body FROM campaign_steps WHERE campaign_id=%s AND position=%s", (campaign_id, position))
 
 
-def text_for(cl: dict, lead: dict) -> str:
-    """Текст сообщения: готовый из строки xlsx или шаблон шага 1 с переменными лида."""
-    if cl.get("custom_text"):
+def text_for(cl: dict, lead: dict, position: int = 1) -> str:
+    """Текст шага: шаг 1 — готовый из строки xlsx или шаблон; дожимы — шаблон шага с переменными лида."""
+    if position == 1 and cl.get("custom_text"):
         return cl["custom_text"].strip()
-    body = step_body(cl["campaign_id"])
+    body = step_body(cl["campaign_id"], position)
     return render(body, db.lead_vars(lead)) if body else ""
+
+
+# ---------- цепочка: дожимы ----------
+CONDITIONS = {"no_reply": "нет ответа", "read_no_reply": "прочитал, но не ответил", "unread": "не прочитал"}
+MAX_FOLLOWUPS = 3
+
+
+def followups(campaign_id: int) -> list[dict]:
+    return db.q("SELECT * FROM campaign_steps WHERE campaign_id=%s AND position > 1 ORDER BY position", (campaign_id,))
+
+
+def next_step(campaign_id: int, after: int) -> dict | None:
+    return db.one("SELECT * FROM campaign_steps WHERE campaign_id=%s AND position > %s ORDER BY position LIMIT 1",
+                  (campaign_id, after))
+
+
+def reschedule(campaign_id: int) -> int:
+    """Пересчитать время следующего дожима у всех, кому уже писали и кто не ответил (после правки цепочки)."""
+    n = 0
+    with db.tx():
+        for cl in db.q("""SELECT id, step, sent_at FROM campaign_leads
+                          WHERE campaign_id=%s AND state IN ('sent','read') AND sent_at IS NOT NULL""", (campaign_id,)):
+            nxt = next_step(campaign_id, cl["step"])
+            at = cl["sent_at"] + timedelta(days=nxt["delay_days"]) if nxt else None
+            n += db.changed("UPDATE campaign_leads SET next_step_at=%s WHERE id=%s AND next_step_at IS DISTINCT FROM %s",
+                            (at, cl["id"], at))
+    return n
+
+
+def stop_reason(cl: dict, lead: dict) -> str | None:
+    """Почему дожимать нельзя: ответил, отписался, менеджер вручную поставил этап."""
+    if cl["state"] == "replied":
+        return "ответил"
+    if lead["opted_out_at"]:
+        return "отписался"
+    if lead.get("stage_id"):
+        st = db.one("SELECT name, auto FROM funnel_stages WHERE id=%s", (lead["stage_id"],))
+        if st and not st["auto"]:
+            return f"этап «{st['name']}»"
+    return None
 
 
 # ---------- фильтры ----------

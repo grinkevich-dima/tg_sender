@@ -23,7 +23,8 @@ def set_stage(lead_id: int, stage_id: int | None) -> None:
 
 
 def record(account_id: int, lead_id: int, direction: str, text: str | None, tg_message_id: int | None,
-           source: str, campaign_lead_id: int | None = None, sender_user_id: int | None = None) -> bool:
+           source: str, campaign_lead_id: int | None = None, sender_user_id: int | None = None,
+           step: int | None = None) -> bool:
     """Сохраняет сообщение переписки; одно сообщение Telegram — одна строка. True — новая строка.
 
     Своё исходящее может прийти дважды: событием Telegram («вручную в Telegram») и из панели (кампания/инбокс).
@@ -31,15 +32,16 @@ def record(account_id: int, lead_id: int, direction: str, text: str | None, tg_m
     if source == "telegram":
         conflict = "DO NOTHING"
     else:
-        conflict = """DO UPDATE SET source=excluded.source,
+        conflict = """DO UPDATE SET source=excluded.source, step=COALESCE(excluded.step, messages.step),
                       campaign_lead_id=COALESCE(excluded.campaign_lead_id, messages.campaign_lead_id),
                       sender_user_id=COALESCE(excluded.sender_user_id, messages.sender_user_id)"""
     return db.val(f"""INSERT INTO messages(account_id, lead_id, campaign_lead_id, direction, tg_message_id, text,
-                                           source, sender_user_id)
-                      VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                                           source, sender_user_id, step)
+                      VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                       ON CONFLICT (account_id, lead_id, direction, tg_message_id) WHERE tg_message_id IS NOT NULL {conflict}
                       RETURNING (xmax = 0)""",
-                  (account_id, lead_id, campaign_lead_id, direction, tg_message_id, text, source, sender_user_id)) is True
+                  (account_id, lead_id, campaign_lead_id, direction, tg_message_id, text, source, sender_user_id,
+                   step)) is True
 
 
 def unread_count(account_ids: list[int] | None) -> int:

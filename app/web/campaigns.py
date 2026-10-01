@@ -111,7 +111,15 @@ async def campaign_view(request: Request, cid: int, show: str = ""):
                         "authorized": tgm.get(a["id"]).authorized, "paused": worker.paused_until(a),
                         "wstate": worker.state.get(a["id"], {})})
     per_day = sum(a["limit"] for a in per_acc if a["status"] == "active")
+    chain = [{"position": 1, "body": cmp.step_body(cid), "delay_days": 0, "condition": None, "id": None}] + cmp.followups(cid)
+    step_stats = {r["step"]: r for r in db.q("""SELECT m.step, COUNT(*) sent FROM messages m JOIN campaign_leads cl ON cl.id=m.campaign_lead_id
+                                                WHERE cl.campaign_id=%s AND m.direction='out' GROUP BY m.step""", (cid,))}
+    for r in db.q("""SELECT step, COUNT(*) FILTER (WHERE state='replied') replied,
+                     COUNT(*) FILTER (WHERE next_step_at IS NOT NULL) waiting
+                     FROM campaign_leads WHERE campaign_id=%s GROUP BY step""", (cid,)):
+        step_stats.setdefault(r["step"], {"sent": 0}).update(replied=r["replied"], waiting=r["waiting"])
     return page(request, "campaign.html", c=c, f=f, facets=cmp.facets(cid), matched=matched, enq=enq, stats=stats,
+                chain=chain, step_stats=step_stats, CONDITIONS=cmp.CONDITIONS, max_followups=cmp.MAX_FOLLOWUPS,
                 rows=rows, show=show, total=sum(stats.values()), step=cmp.step_body(cid),
                 eta_days=eta_days(stats.get("queued", 0), per_day), accs=per_acc,
                 my_accounts=auth.user_accounts(u, only_active=True),
@@ -158,6 +166,59 @@ async def campaign_set_accounts(request: Request, cid: int):
         return back(f"/campaigns/{cid}", err="Нужен хотя бы один аккаунт")
     cmp.set_accounts(cid, accs + keep)
     return back(f"/campaigns/{cid}", msg="Аккаунты кампании обновлены. Уже закреплённые лиды остаются за своими аккаунтами")
+
+
+# ---------- цепочка: дожимы ----------
+def _step_form(form) -> tuple[dict, str]:
+    body = (form.get("body") or "").strip()
+    days = str(form.get("delay_days") or "").strip()
+    cond = form.get("condition") or "no_reply"
+    if not body:
+        return {}, "Напишите текст дожима"
+    if not (days.isdigit() and 1 <= int(days) <= 60):
+        return {}, "Задержка — от 1 до 60 дней"
+    if cond not in cmp.CONDITIONS:
+        return {}, "Неизвестное условие"
+    return {"body": body, "delay_days": int(days), "condition": cond}, ""
+
+
+@router.post("/{cid}/steps/add")
+async def step_add(request: Request, cid: int):
+    if not _get(request, cid):
+        return back("/campaigns", err="Кампания не найдена")
+    if len(cmp.followups(cid)) >= cmp.MAX_FOLLOWUPS:
+        return back(f"/campaigns/{cid}", err=f"Не больше {cmp.MAX_FOLLOWUPS} дожимов: дальше люди чаще жалуются, чем отвечают")
+    vals, err = _step_form(await request.form())
+    if err:
+        return back(f"/campaigns/{cid}", err=err)
+    pos = max(2, (db.val("SELECT MAX(position) FROM campaign_steps WHERE campaign_id=%s", (cid,)) or 1) + 1)
+    db.ex("""INSERT INTO campaign_steps(campaign_id, position, body, delay_days, condition)
+             VALUES (%s, %s, %s, %s, %s)""", (cid, pos, vals["body"], vals["delay_days"], vals["condition"]))
+    n = cmp.reschedule(cid)
+    return back(f"/campaigns/{cid}", msg="Дожим добавлен" + (f"; запланирован для {n} человек, которые не ответили" if n else ""))
+
+
+@router.post("/{cid}/steps/{sid}")
+async def step_save(request: Request, cid: int, sid: int):
+    if not _get(request, cid):
+        return back("/campaigns", err="Кампания не найдена")
+    vals, err = _step_form(await request.form())
+    if err:
+        return back(f"/campaigns/{cid}", err=err)
+    db.ex("""UPDATE campaign_steps SET body=%s, delay_days=%s, condition=%s
+             WHERE id=%s AND campaign_id=%s AND position > 1""",
+          (vals["body"], vals["delay_days"], vals["condition"], sid, cid))
+    cmp.reschedule(cid)
+    return back(f"/campaigns/{cid}", msg="Дожим сохранён")
+
+
+@router.post("/{cid}/steps/{sid}/delete")
+async def step_delete(request: Request, cid: int, sid: int):
+    if not _get(request, cid):
+        return back("/campaigns", err="Кампания не найдена")
+    db.ex("DELETE FROM campaign_steps WHERE id=%s AND campaign_id=%s AND position > 1", (sid, cid))
+    cmp.reschedule(cid)
+    return back(f"/campaigns/{cid}", msg="Дожим удалён")
 
 
 @router.post("/{cid}/{action}")

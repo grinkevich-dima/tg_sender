@@ -46,8 +46,8 @@
 | `segments`, `segment_leads` | сегменты и их состав (откуда добавлен лид: csv / telegram / tag) |
 | `campaigns` | кампании: источник (`template`/`xlsx`), статус, автор |
 | `campaign_accounts` | с каких аккаунтов идёт кампания |
-| `campaign_steps` | текст шага (сейчас шаг 1; дожимы — следующий этап) |
-| `campaign_leads` | лид в кампании: аккаунт, состояние, свой текст из xlsx, тема форума, поля файла для фильтров, ошибка, время отправки/прочтения/ответа |
+| `campaign_steps` | шаги цепочки: шаг 1 (текст шаблона) и дожимы — текст, `delay_days`, `condition` (`no_reply` / `read_no_reply` / `unread`) |
+| `campaign_leads` | лид в кампании: аккаунт, состояние, последний шаг `step`, `next_step_at` (когда дожим), `chain_note`, свой текст из xlsx, тема форума, поля файла для фильтров, ошибка, время отправки/прочтения/ответа |
 | `messages` | вся переписка: `source` — кампания / из панели (`inbox`) / вручную в Telegram / входящее, `sender_user_id`; одно сообщение Telegram — одна строка |
 | `funnel_stages` | этапы воронки: порядок, цель, отказ, `auto` (`contacted` / `replied` — ставятся сами) |
 | `tg_dialogs` | снимок диалогов аккаунта: поиск чатов по названию, «есть ли переписка», группы для сегментов (`is_admin`, `members`, `username` для ссылки t.me, `last_message_id` для ссылки в приложение) |
@@ -60,9 +60,9 @@
 
 1. Аккаунт не авторизован / на ручной паузе / идёт «Найти получателей» → ждать.
 2. Действует `paused_until` (FloodWait, PEER_FLOOD) → ждать.
-3. Взять следующую строку **этого аккаунта** из запущенных кампаний (по `order_idx`).
+3. Взять дожим этого аккаунта, время которого пришло (`next_step_at`); если нет — следующую строку очереди (по `order_idx`).
 4. Вне рабочих часов → ждать 60 с. Лимит дня аккаунта исчерпан → ждать 5 мин.
-5. Атомарно перевести строку в `sending` (если её уже взял другой запрос — пропустить), найти адресата, отправить, записать в `campaign_leads` и `messages`, выждать случайную паузу.
+5. Дожим: проверить остановку (ответ, отписка, ручной этап) и условие шага, отправить, запланировать следующий. Первое сообщение: атомарно перевести строку в `sending` (если её уже взял другой запрос — пропустить), найти адресата, отправить, записать в `campaign_leads` и `messages`, выждать случайную паузу.
 
 Ошибки:
 - `FloodWaitError` → `paused_until` аккаунта = сейчас + N;
@@ -102,7 +102,7 @@
 | Поиск групп | `/chat-search`, `/chat-search/create`, `/chat-search/links`, `/chat-search/state`, `/chat-search/{id}/rerun`, `/chat-search/{id}/delete`, `/chat-search/found/{id}/{status}` |
 | Сегменты | `/segments`, `/segments/create`, `/segments/{id}`, `/import-csv`, `/import-tg`, `/add-tag`, `/refresh-groups`, `/import-group`, `/remove/{lead_id}`, `/edit`, `/delete` |
 | Шаблоны | `/templates`, `/templates/save`, `/templates/{id}/test`, `/templates/{id}/delete` |
-| Кампании | `/campaigns`, `/campaigns/create`, `/campaigns/upload`, `/campaigns/{id}`, `/enqueue`, `/accounts`, `/{start\|pause\|unqueue\|retry\|prepare\|delete}`, `/prepare-status`, `/export.csv`; строки — `/campaigns/row/{id}/{send\|skip\|reset}` |
+| Кампании | `/campaigns`, `/campaigns/create`, `/campaigns/upload`, `/campaigns/{id}`, `/enqueue`, `/accounts`, `/steps/add`, `/steps/{id}`, `/steps/{id}/delete`, `/{start\|pause\|unqueue\|retry\|prepare\|delete}`, `/prepare-status`, `/export.csv`; строки — `/campaigns/row/{id}/{send\|skip\|reset}` |
 | Прочее | `/` (дашборд), `/reads/refresh`, `/settings` (правила), `/log` |
 
 Все POST-формы после обработки перенаправляют (Post/Redirect/Get). Сообщение передаётся одноразовой cookie `flash`.

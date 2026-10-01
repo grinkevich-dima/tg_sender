@@ -27,7 +27,43 @@
   <br><small class="muted">Лиды, уже закреплённые за аккаунтом, остаются за ним — новые будут распределяться между выбранными.</small>
 </form></details>
 
-{% if step %}<details><summary class="muted">Текст (шаблон шага 1)</summary><pre class="tpl">{{ step }}</pre></details>{% endif %}
+<article>
+<header><strong>Цепочка</strong> <small class="muted">· дожимы уходят тем, кто не ответил; цепочка останавливается при ответе, отписке или этапе, поставленном вручную</small></header>
+<table>
+<thead><tr><th>Шаг</th><th>Когда</th><th>Текст</th><th>Отправлено</th><th>Ответили после</th><th>Ждут шага</th><th></th></tr></thead>
+{% for st in chain %}{% set ss = step_stats.get(st.position, {}) %}{% set prev = step_stats.get(chain[loop.index0 - 1].position, {}) if not loop.first else {} %}
+<tr>
+  <td><b>{{ 'Первое сообщение' if st.position == 1 else 'Дожим ' ~ (loop.index0) }}</b></td>
+  <td><small>{% if st.position == 1 %}при отправке{% else %}через {{ st.delay_days }} дн.<br><span class="muted">если {{ CONDITIONS[st.condition] }}</span>{% endif %}</small></td>
+  <td><small>{% if st.position == 1 %}{% if st.body %}<details><summary>{{ st.body[:60] }}…</summary><pre class="tpl">{{ st.body }}</pre></details>{% else %}<span class="muted">свой текст в каждой строке файла</span>{% endif %}
+      {% else %}<details><summary>{{ st.body[:60] }}…</summary>
+        <form method="post" action="/campaigns/{{ c.id }}/steps/{{ st.id }}">
+          <textarea name="body" rows="4" required>{{ st.body }}</textarea>
+          <div class="grid"><label>Через, дней<input type="number" name="delay_days" min="1" max="60" value="{{ st.delay_days }}" required></label>
+          <label>Условие<select name="condition">{% for k, v in CONDITIONS.items() %}<option value="{{ k }}" {% if k == st.condition %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label></div>
+          <button class="outline" style="width:auto">Сохранить</button>
+        </form></details>{% endif %}</small></td>
+  <td>{{ ss.sent or 0 }}</td>
+  <td>{{ ss.replied or 0 }}</td>
+  <td>{% if not loop.first %}{{ prev.waiting or 0 }}{% else %}—{% endif %}</td>
+  <td class="row-actions">{% if st.position > 1 %}<form method="post" action="/campaigns/{{ c.id }}/steps/{{ st.id }}/delete" onsubmit="return confirm('Удалить дожим? Тем, кто его ещё ждёт, он не придёт')"><button class="outline secondary">✕</button></form>{% endif %}</td>
+</tr>
+{% endfor %}
+</table>
+{% if chain|length - 1 < max_followups %}
+<details><summary>➕ Добавить дожим</summary>
+<form method="post" action="/campaigns/{{ c.id }}/steps/add">
+  <textarea name="body" rows="4" required placeholder="{first_name}, {напоминаю|подскажу} — запись вебинара доступна до пятницы: …"></textarea>
+  <div class="grid">
+    <label>Через, дней после предыдущего сообщения<input type="number" name="delay_days" min="1" max="60" value="3" required></label>
+    <label>Отправить, если<select name="condition">{% for k, v in CONDITIONS.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label>
+  </div>
+  <button style="width:auto">Добавить</button>
+</form>
+<small class="muted">Переменные и спинтакс как в шаблонах. Если условие не выполнено (например, «прочитал, но не ответил», а человек не открыл сообщение), шаг пропускается и цепочка идёт дальше. Дожимы входят в дневной лимит аккаунта и уходят раньше новых первых сообщений.</small>
+</details>
+{% else %}<small class="muted">Максимум {{ max_followups }} дожима.</small>{% endif %}
+</article>
 
 <div class="row-actions" style="margin:1rem 0">
   {% if c.status in ('draft','paused','done') and stats.get('queued') %}<form method="post" action="/campaigns/{{ c.id }}/start"><button>▶ Запустить отправку</button></form>{% endif %}
@@ -100,7 +136,9 @@
       {% else %}✓ {{ r.real_dialog }}{% endif %}{% endif %}</small></td>
   <td><small>{{ r.acc_label or '—' }}</small></td>
   <td><span class="badge b-{{ r.state }}">{{ STATE_RU[r.state] }}</span>
-      {% if r.sent_at %}<br><small class="muted">{{ r.sent_at|dt }}</small>{% endif %}</td>
+      {% if r.sent_at %}<br><small class="muted">{{ r.sent_at|dt }}{% if r.step > 1 %} · шаг {{ r.step }}{% endif %}</small>{% endif %}
+      {% if r.next_step_at %}<br><small class="muted">дожим {{ r.next_step_at|dt }}</small>{% endif %}
+      {% if r.chain_note %}<br><small class="muted">{{ r.chain_note }}</small>{% endif %}</td>
   <td><small>{% if r.error %}<span class="log-error">{{ r.error }}</span><br>{% endif %}
       {% if r.custom_text %}<details><summary class="muted">{{ r.custom_text[:70] }}…</summary><pre class="tpl">{{ r.custom_text }}</pre>
       <span class="muted">Статус из файла: {{ r.src_status or '—' }}</span></details>{% elif not step %}<span class="muted">— нет текста —</span>{% endif %}</small></td>

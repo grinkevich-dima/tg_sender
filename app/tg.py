@@ -447,7 +447,8 @@ class AccountClient:
         if lead:
             inbox.record(self.id, lead["id"], "in", text, tg_message_id, "incoming")
             inbox.auto_stage(lead["id"], "replied")
-            db.ex("""UPDATE campaign_leads SET state='replied', replied_at=now()
+            db.ex("""UPDATE campaign_leads SET state='replied', replied_at=now(), next_step_at=NULL,
+                     chain_note=CASE WHEN next_step_at IS NOT NULL THEN 'дожимы остановлены: ответил' ELSE chain_note END
                      WHERE lead_id=%s AND account_id=%s AND state IN ('sent', 'read')""", (lead["id"], self.id))
         if leads.is_stop_message(text, db.get_setting("stop_words")):
             if not lead:

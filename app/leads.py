@@ -148,6 +148,8 @@ def opt_out(lead_id: int, reason: str) -> None:
           (reason, lead_id))
     db.ex("""UPDATE campaign_leads SET state='skipped', error='отписался'
              WHERE lead_id=%s AND state IN ('new', 'queued')""", (lead_id,))
+    db.ex("""UPDATE campaign_leads SET next_step_at=NULL, chain_note='дожимы остановлены: отписался'
+             WHERE lead_id=%s AND next_step_at IS NOT NULL""", (lead_id,))
 
 
 def opt_in(lead_id: int) -> None:

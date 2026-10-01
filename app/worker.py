@@ -5,7 +5,7 @@
 """
 import asyncio
 import random
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from telethon import errors
 
@@ -65,8 +65,11 @@ def warmup_day(acc: dict) -> int:
 
 
 def sent_today(account_id: int) -> int:
-    return db.val("""SELECT COUNT(*) FROM campaign_leads WHERE account_id=%s AND sent_day=%s
-                     AND state IN ('sent','read','replied')""", (account_id, db.today())) or 0
+    """Сообщения кампаний за сегодня (первые и дожимы) — то, что расходует дневной лимит. Ответы из инбокса не считаются."""
+    start = datetime.combine(db.today(), time.min, tzinfo=db.now_local().tzinfo)
+    return db.val("""SELECT COUNT(*) FROM messages WHERE account_id=%s AND direction='out' AND source='campaign'
+                     AND created_at >= %s AND created_at < %s""",
+                  (account_id, start, start + timedelta(days=1))) or 0
 
 
 def in_work_hours(acc: dict, now: datetime | None = None) -> bool:
@@ -91,7 +94,8 @@ def recover_interrupted():
 
 def finish_campaigns():
     for c in db.q("""SELECT id, name FROM campaigns c WHERE status='running' AND NOT EXISTS
-                     (SELECT 1 FROM campaign_leads cl WHERE cl.campaign_id=c.id AND cl.state IN ('queued','sending'))"""):
+                     (SELECT 1 FROM campaign_leads cl WHERE cl.campaign_id=c.id
+                      AND (cl.state IN ('queued','sending') OR cl.next_step_at IS NOT NULL))"""):
         db.ex("UPDATE campaigns SET status='done', finished_at=now() WHERE id=%s", (c["id"],))
         db.log(f"Кампания «{c['name']}» отправлена полностью")
 
@@ -146,6 +150,14 @@ def _status(account_id: int, text: str, next_at=None) -> None:
     state[account_id] = {"status": text, "next_send_at": next_at}
 
 
+def due_followup(account_id: int) -> dict | None:
+    """Дожим, время которого пришло (в запущенных кампаниях). Идут раньше новых первых сообщений."""
+    return db.one("""SELECT cl.* FROM campaign_leads cl JOIN campaigns c ON c.id=cl.campaign_id
+                     WHERE cl.account_id=%s AND cl.next_step_at <= now() AND cl.state IN ('sent','read')
+                       AND c.status='running'
+                     ORDER BY cl.next_step_at, cl.id LIMIT 1""", (account_id,))
+
+
 def next_item(account_id: int) -> dict | None:
     return db.one("""SELECT cl.* FROM campaign_leads cl JOIN campaigns c ON c.id=cl.campaign_id
                      WHERE cl.account_id=%s AND cl.state='queued' AND c.status='running'
@@ -170,7 +182,8 @@ async def tick(account_id: int) -> float:
         _status(account_id, f"пауза до {pu.astimezone(db.now_local().tzinfo):%d.%m %H:%M} ({acc['pause_reason'] or 'ограничение Telegram'})")
         return min(60, (pu - db.now_utc()).total_seconds() + 1)
 
-    item = next_item(account_id)
+    followup = due_followup(account_id)
+    item = followup or next_item(account_id)
     if not item:
         _status(account_id, "очередь пуста")
         return 30
@@ -182,7 +195,9 @@ async def tick(account_id: int) -> float:
         _status(account_id, f"дневной лимит исчерпан ({done}/{limit})")
         return 300
 
-    res = await send_item(item)
+    res = await (send_followup(item) if followup else send_item(item))
+    if res in ("stopped", "skipped_step", "busy"):     # ничего не отправили — следующий без паузы
+        return 1
     if res in ("flood", "peerflood"):
         acc = account(account_id)
         _status(account_id, f"пауза до {acc['paused_until'].astimezone(db.now_local().tzinfo):%d.%m %H:%M} ({acc['pause_reason']})")
@@ -282,14 +297,79 @@ async def send_item(item: dict) -> str:
         db.log(f"Строка #{cl_id}: непредвиденная ошибка {type(e).__name__}: {e}", "error", account_id)
         return "failed"
 
+    nxt = campaigns.next_step(item["campaign_id"], 1)
     with db.tx():
-        db.ex("""UPDATE campaign_leads SET state='sent', tg_message_id=%s, sent_at=now(), sent_day=%s, error=NULL
-                 WHERE id=%s""", (sent.id, db.today(), cl_id))
-        inbox.record(account_id, lead["id"], "out", text, sent.id, "campaign", campaign_lead_id=cl_id)
+        db.ex("""UPDATE campaign_leads SET state='sent', tg_message_id=%s, sent_at=now(), sent_day=%s, error=NULL,
+                 step=1, next_step_at=%s, chain_note=NULL WHERE id=%s""",
+              (sent.id, db.today(), db.now_utc() + timedelta(days=nxt["delay_days"]) if nxt else None, cl_id))
+        inbox.record(account_id, lead["id"], "out", text, sent.id, "campaign", campaign_lead_id=cl_id, step=1)
         inbox.auto_stage(lead["id"], "contacted")
         db.ex("UPDATE leads SET owner_account_id=%s WHERE id=%s AND owner_account_id IS NULL", (account_id, lead["id"]))
         db.ex("UPDATE tg_accounts SET warmup_start_date=%s WHERE id=%s AND warmup_start_date IS NULL",
               (db.today(), account_id))
+    return "sent"
+
+
+def _schedule_after(cl: dict, position: int, note: str | None) -> None:
+    """Шаг position считается пройденным (отправлен или пропущен) — ставим время следующего."""
+    nxt = campaigns.next_step(cl["campaign_id"], position)
+    db.ex("UPDATE campaign_leads SET step=%s, next_step_at=%s, chain_note=%s WHERE id=%s",
+          (position, db.now_utc() + timedelta(days=nxt["delay_days"]) if nxt else None, note, cl["id"]))
+
+
+async def send_followup(cl: dict) -> str:
+    """Отправляет следующий шаг цепочки лиду, который не ответил. Захват строки атомарный: второй воркер
+    или повторный вызов получит busy, а не отправит дубль."""
+    if not db.changed("""UPDATE campaign_leads SET next_step_at=NULL WHERE id=%s AND next_step_at=%s
+                         AND state IN ('sent','read')""", (cl["id"], cl["next_step_at"])):
+        return "busy"
+    lead = db.one("SELECT * FROM leads WHERE id=%s", (cl["lead_id"],))
+    reason = campaigns.stop_reason(cl, lead)
+    if reason:
+        db.ex("UPDATE campaign_leads SET chain_note=%s WHERE id=%s", (f"дожимы остановлены: {reason}", cl["id"]))
+        return "stopped"
+    step = campaigns.next_step(cl["campaign_id"], cl["step"])
+    if not step:
+        return "stopped"
+    pos = step["position"]
+    if step["condition"] == "read_no_reply" and cl["state"] != "read":
+        _schedule_after(cl, pos, f"шаг {pos} пропущен: не прочитал")
+        return "skipped_step"
+    if step["condition"] == "unread" and cl["state"] == "read":
+        _schedule_after(cl, pos, f"шаг {pos} пропущен: уже прочитал")
+        return "skipped_step"
+    text = campaigns.text_for(cl, lead, pos)
+    if not text:
+        _schedule_after(cl, pos, f"шаг {pos} пропущен: нет текста")
+        return "skipped_step"
+    client: AccountClient = tgm.get(cl["account_id"])
+    restore = lambda: db.ex("UPDATE campaign_leads SET next_step_at=%s WHERE id=%s", (cl["next_step_at"], cl["id"]))
+    if not client.authorized:
+        restore()
+        return "no_account"
+    try:
+        async with client.lock:
+            entity = await client.resolve(lead)
+            reply_to = cl["topic_id"] if cl["topic_id"] and cl["topic_id"] > 1 else None
+            if type(entity).__name__ == "InputPeerChat":
+                reply_to = None
+            sent = await client.client.send_message(entity, text, reply_to=reply_to, link_preview=True)
+    except (errors.FloodWaitError, errors.PeerFloodError) as e:
+        restore()
+        return _flood(cl["account_id"], e)
+    except TRANSIENT_ERRORS:
+        restore()
+        raise
+    except Exception as e:      # получатель недоступен и т.п. — первое сообщение дошло, просто прекращаем дожимы
+        db.ex("UPDATE campaign_leads SET chain_note=%s WHERE id=%s",
+              (f"дожим {pos} не отправлен: {type(e).__name__.replace('Error', '')}: {e}"[:300], cl["id"]))
+        return "failed"
+    nxt = campaigns.next_step(cl["campaign_id"], pos)
+    with db.tx():
+        db.ex("""UPDATE campaign_leads SET state='sent', tg_message_id=%s, sent_at=now(), sent_day=%s, step=%s,
+                 next_step_at=%s, chain_note=NULL WHERE id=%s""",
+              (sent.id, db.today(), pos, db.now_utc() + timedelta(days=nxt["delay_days"]) if nxt else None, cl["id"]))
+        inbox.record(cl["account_id"], lead["id"], "out", text, sent.id, "campaign", campaign_lead_id=cl["id"], step=pos)
     return "sent"
 
 
