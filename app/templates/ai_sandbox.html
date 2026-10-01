@@ -5,7 +5,8 @@
 <p class="muted">Клиент: {{ s.client.name }}{% if s.client.group %}, «{{ s.client.group }}»{% endif %}{% if s.client.stage %}, этап «{{ s.client.stage }}»{% endif %}
   · робот: {{ s.persona_text if s.persona == 'custom' and s.persona_text else PERSONAS.get(s.persona, ['?'])[0] }} · в Telegram ничего не уходит</p>
 
-<div class="chat" id="chat" style="max-height:62vh">
+<div class="sbx">
+<div class="chat sbx-chat" id="chat" aria-live="polite" aria-label="Переписка">
   {% for m in msgs %}
   <div class="msg {{ 'in' if m.role == 'client' else 'out' }}">
     <span class="t">{{ m.text }}</span>
@@ -34,16 +35,23 @@
   {% else %}<p class="muted">Диалог пуст — напишите как клиент или включите робота.</p>{% endfor %}
 </div>
 
-<div style="margin-top:.6rem">
-  <textarea id="say" rows="2" placeholder="Ответьте как клиент… (Ctrl+Enter — отправить)" autofocus></textarea>
-  <div class="row-actions">
-    <button id="say-btn" {% if not ai_on %}disabled{% endif %}>Отправить как клиент</button>
-    <button class="outline" id="robot-btn" {% if not ai_on %}disabled{% endif %}>🤖 Ход клиента-робота</button>
-    <select id="turns" style="width:auto;display:inline-block;margin:0;padding:.3rem .6rem;font-size:.85em">
-      {% for n in range(1, max_turns + 1) %}<option value="{{ n }}">{{ n }} {{ 'ход' if n == 1 else 'хода' if n < 5 else 'ходов' }}</option>{% endfor %}
-    </select>
-    <small class="muted" id="busy"></small>
+<div class="composer">
+  <div class="composer-row">
+    <textarea id="say" rows="1" placeholder="Сообщение от клиента…" aria-label="Сообщение от клиента"
+              autocomplete="off" {% if not ai_on %}disabled{% endif %}></textarea>
+    <button type="button" id="say-btn" class="send" aria-label="Отправить" title="Отправить (Enter)" {% if not ai_on %}disabled{% endif %}>➤</button>
   </div>
+  <div class="composer-foot">
+    <span class="robot">
+      <button type="button" class="outline" id="robot-btn" {% if not ai_on %}disabled{% endif %}>🤖 Ход клиента-робота</button>
+      <select id="turns" aria-label="Сколько ходов">
+        {% for n in range(1, max_turns + 1) %}<option value="{{ n }}">× {{ n }}</option>{% endfor %}
+      </select>
+    </span>
+    <span id="busy" class="busy" role="status"></span>
+    <span class="hint">Enter — отправить · Shift+Enter — новая строка</span>
+  </div>
+</div>
 </div>
 {% if not can_save and s.profile_id %}<small class="muted">Сохранять примеры в профиль может его автор или админ.</small>{% endif %}
 <form method="post" action="/ai/sandbox/{{ s.id }}/delete" style="margin-top:1rem" onsubmit="return confirm('Удалить диалог? Сохранённые примеры останутся')">
@@ -51,34 +59,82 @@
 
 <script>
 (function(){
-  const chat = document.getElementById('chat'); chat.scrollTop = chat.scrollHeight;
-  const busy = document.getElementById('busy'), say = document.getElementById('say');
-  async function call(url, data, label) {
-    for (const b of document.querySelectorAll('#say-btn,#robot-btn')) b.disabled = true;
-    busy.textContent = label;
-    try {
-      const body = new FormData(); for (const [k, v] of Object.entries(data || {})) body.append(k, v);
-      const j = await (await fetch(url, {method: 'POST', body})).json();
-      if (j.error) { busy.textContent = j.error; for (const b of document.querySelectorAll('#say-btn,#robot-btn')) b.disabled = false; return; }
-      location.reload();
-    } catch (e) { busy.textContent = 'Ошибка связи'; }
+  const chat = document.getElementById('chat'), say = document.getElementById('say'), sendBtn = document.getElementById('say-btn');
+  const robotBtn = document.getElementById('robot-btn'), busy = document.getElementById('busy');
+  const LINE = 22, MAX_LINES = 6;
+  const toBottom = () => { chat.scrollTop = chat.scrollHeight; };
+  function autosize() {
+    // пустое поле — одна строка из стилей; иначе по содержимому, но не выше 6 строк
+    if (!say.value) { say.style.height = ''; return; }
+    say.style.height = 'auto';
+    say.style.height = Math.min(say.scrollHeight + 2, LINE * MAX_LINES + 18) + 'px';
   }
-  document.getElementById('say-btn').addEventListener('click', () => {
-    if (say.value.trim()) call('/ai/sandbox/{{ s.id }}/say', {text: say.value}, 'Бот думает…');
+  function lock(on) {
+    for (const el of [say, sendBtn, robotBtn, document.getElementById('turns')]) el.disabled = on;
+  }
+  function bubble(cls, text) {
+    const d = document.createElement('div');
+    d.className = 'msg ' + cls;
+    if (text !== null) { const t = document.createElement('span'); t.className = 't'; t.textContent = text; d.appendChild(t); }
+    chat.appendChild(d); toBottom(); return d;
+  }
+  function typing(who) {
+    const d = bubble('out typing', null);
+    d.innerHTML = '<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>';
+    d.setAttribute('aria-label', who); return d;
+  }
+  async function refresh() {
+    // перерисовываем только переписку — без перезагрузки страницы
+    const html = await (await fetch(location.href, {cache: 'no-store'})).text();
+    const fresh = new DOMParser().parseFromString(html, 'text/html').getElementById('chat');
+    if (fresh) chat.innerHTML = fresh.innerHTML;
+    toBottom();
+  }
+  async function post(url, data) {
+    const body = new FormData();
+    for (const [k, v] of Object.entries(data || {})) body.append(k, v);
+    return (await fetch(url, {method: 'POST', body})).json();
+  }
+  async function run(url, data, who, optimistic) {
+    lock(true); busy.textContent = '';
+    const mine = optimistic ? bubble('in pending', optimistic) : null;
+    const dots = typing(who);
+    try {
+      const j = await post(url, data);
+      if (j.error) throw new Error(j.error);
+      await refresh();
+    } catch (e) {
+      dots.remove(); if (mine) mine.remove();
+      if (optimistic) { say.value = optimistic; autosize(); }
+      busy.textContent = e.message === 'Failed to fetch' ? 'Нет связи с панелью — попробуйте ещё раз' : e.message;
+    }
+    lock(false); say.focus();
+  }
+  function send() {
+    const text = say.value.trim();
+    if (!text || say.disabled) return;
+    say.value = ''; autosize();
+    run('/ai/sandbox/{{ s.id }}/say', {text}, 'Бот печатает', text);
+  }
+  say.addEventListener('input', autosize);
+  say.addEventListener('keydown', e => {
+    // Enter — отправить; Shift+Enter — перенос; во время набора через IME Enter подтверждает слово
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); send(); }
   });
-  say.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) document.getElementById('say-btn').click(); });
-  document.getElementById('robot-btn').addEventListener('click', () => {
+  sendBtn.addEventListener('click', send);
+  robotBtn.addEventListener('click', () => {
     const n = document.getElementById('turns').value;
-    call('/ai/sandbox/{{ s.id }}/robot', {turns: n}, `Клиент-робот и бот переписываются (${n})…`);
+    run('/ai/sandbox/{{ s.id }}/robot', {turns: n}, 'Клиент-робот и бот переписываются', null);
   });
   chat.addEventListener('click', e => {
     const a = e.target.closest('a'); if (!a) return;
     e.preventDefault();
     if (a.dataset.debug) document.getElementById('dbg-' + a.dataset.debug).hidden ^= true;
     if (a.dataset.fix) document.getElementById('fix-' + a.dataset.fix).hidden ^= true;
-    if (a.dataset.retry) call('/ai/sandbox/{{ s.id }}/retry/' + a.dataset.retry, {}, 'Бот переписывает ответ…');
+    if (a.dataset.retry) { a.closest('.msg').remove(); run('/ai/sandbox/{{ s.id }}/retry/' + a.dataset.retry, {}, 'Бот переписывает ответ', null); }
     if (a.dataset.save) { const f = document.getElementById('fix-' + a.dataset.save); f.querySelector('textarea').value = ''; f.submit(); }
   });
+  toBottom(); autosize(); if (!say.disabled) say.focus();
 })();
 </script>
 {% endblock %}

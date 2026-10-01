@@ -49,6 +49,24 @@
   .msg .meta { display:block; font-size:.72em; opacity:.7; margin-top:.2rem; }
   .stage { padding:1px 7px; border-radius:9px; font-size:.75em; background:#f1f5f9; color:#334155; white-space:nowrap; }
   .stage.goal { background:#dcfce7; color:#14532d; } .stage.lost { background:#fee2e2; color:#7f1d1d; }
+  .sbx { border:1px solid var(--pico-muted-border-color); border-radius:12px; overflow:hidden; }
+  .sbx-chat { border:none; border-radius:0; height: calc(100vh - 330px); min-height: 320px; max-height:none; }
+  .msg.pending { opacity:.65; }
+  .msg.typing { padding:.55rem .8rem; }
+  .dots { display:inline-flex; gap:4px; } .dots i { width:7px; height:7px; border-radius:50%; background:currentColor; opacity:.35;
+    animation: blink 1.2s infinite ease-in-out; } .dots i:nth-child(2) { animation-delay:.2s; } .dots i:nth-child(3) { animation-delay:.4s; }
+  @keyframes blink { 0%,80%,100% { opacity:.25; transform:translateY(0) } 40% { opacity:.9; transform:translateY(-2px) } }
+  @media (prefers-reduced-motion: reduce) { .dots i { animation:none; opacity:.6; } }
+  .composer { border-top:1px solid var(--pico-muted-border-color); padding:.6rem .7rem .45rem; background:var(--pico-card-background-color, #fff); }
+  .composer-row { display:flex; gap:.5rem; align-items:flex-end; }
+  .composer-row textarea { flex:1; margin:0; resize:none; min-height:42px; line-height:22px; padding:.5rem .9rem; border-radius:20px; overflow-y:auto; }
+  .composer .send { width:42px; height:42px; min-width:42px; padding:0; margin:0; border-radius:50%; font-size:1.05em; line-height:1; }
+  .composer-foot { display:flex; flex-wrap:wrap; gap:.4rem .8rem; align-items:center; margin-top:.4rem; font-size:.8em; }
+  .composer-foot .robot { display:inline-flex; gap:.3rem; align-items:center; }
+  .composer-foot .robot button { width:auto; margin:0; padding:.2rem .7rem; font-size:1em; }
+  .composer-foot select { width:auto; margin:0; padding:.15rem 1.8rem .15rem .5rem; font-size:1em; height:auto; }
+  .composer-foot .busy { color:#b91c1c; } .composer-foot .hint { margin-left:auto; color:var(--pico-muted-color); }
+  @media (max-width: 600px) { .composer-foot .hint { display:none; } .sbx-chat { height: calc(100vh - 290px); } }
   .funnel { display:flex; flex-wrap:wrap; gap:.4rem; margin:.5rem 0 1rem; }
   .funnel div { border:1px solid var(--pico-muted-border-color); border-radius:8px; padding:.35rem .7rem; font-size:.85em; }
   .funnel b { font-size:1.15em; margin-left:.3rem; }
