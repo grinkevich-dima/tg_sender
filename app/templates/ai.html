@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<h3>ИИ-помощник</h3>
+<h3>ИИ-помощник <a href="/ai/sandbox" role="button" class="outline" style="width:auto;font-size:.5em;padding:.3rem .8rem">🧪 Тренажёр</a></h3>
 {% if status %}<div class="flash err">ИИ: {{ status }}</div>
 {% else %}<p class="muted">Модель <code>{{ model }}</code> подключена ({{ base_url }}). ИИ только предлагает черновики и разбирает ответы — отправляет всегда человек.</p>{% endif %}
 {% if drafts.total %}<p class="muted">Черновиков: {{ drafts.total }}, отправлено: {{ drafts.sent }}, из них почти без правок: {{ drafts.as_is }}.</p>{% endif %}

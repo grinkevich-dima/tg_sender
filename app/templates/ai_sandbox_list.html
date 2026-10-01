@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/ai" class="muted">← ИИ</a></p>
+<h3>Тренажёр ИИ</h3>
+<p class="muted">Песочница: вы переписываетесь с ботом как клиент или включаете «клиента-робота». В Telegram ничего не уходит.</p>
+{% if not ai_on %}<div class="flash err">ИИ не настроен — см. страницу «ИИ».</div>{% endif %}
+
+<article>
+<header><strong>Новый диалог</strong></header>
+<form method="post" action="/ai/sandbox/create">
+  <div class="grid">
+    <label>Профиль<select name="profile_id"><option value="0">— только общая инструкция —</option>
+      {% for p in profiles %}<option value="{{ p.id }}" {% if p.id == pre %}selected{% endif %}>{{ p.name }}</option>{% endfor %}</select></label>
+    <label>Характер клиента-робота<select name="persona" id="persona">
+      {% for k, v in PERSONAS.items() %}<option value="{{ k }}">{{ v[0] }}</option>{% endfor %}</select></label>
+  </div>
+  <textarea name="persona_text" id="persona-text" rows="2" hidden placeholder="Опишите клиента: «был на семинаре год назад, интересуется только онлайн-форматом, пишет с ошибками»"></textarea>
+  <details><summary class="muted">Вымышленный клиент (ИИ видит его как настоящего)</summary>
+  <div class="grid">
+    <input name="name" placeholder="Имя (Ирина)">
+    <input name="group" placeholder="Группа, напр. «Вебинар: маркетинг»">
+    <input name="joined" placeholder="Вступил, напр. 20.09.2026">
+  </div>
+  <div class="grid">
+    <select name="stage"><option value="">— этап —</option>{% for s in stages %}<option>{{ s.name }}</option>{% endfor %}</select>
+    <input name="note" placeholder="Заметка менеджера">
+  </div>
+  </details>
+  <label><input type="checkbox" name="campaign_opening" value="1" checked> Начать с первого сообщения кампании этого профиля</label>
+  <textarea name="opening" rows="2" placeholder="…или своё первое сообщение от нас (необязательно)"></textarea>
+  <button {% if not ai_on %}disabled{% endif %}>Начать диалог</button>
+</form>
+</article>
+
+<table>
+<thead><tr><th>Диалог</th><th>Профиль</th><th>Клиент</th><th>Сообщений</th><th>Сохранено примеров</th>{% if is_admin %}<th>Кто</th>{% endif %}</tr></thead>
+{% for r in rows %}
+<tr><td><a href="/ai/sandbox/{{ r.id }}">#{{ r.id }} · {{ r.created_at|dt }}</a></td><td>{{ r.profile_name or '—' }}</td>
+<td><small>{{ r.client.name }} · {{ PERSONAS.get(r.persona, ['?'])[0] }}</small></td><td>{{ r.n }}</td><td>{{ r.saved }}</td>
+{% if is_admin %}<td><small>{{ r.user_name }}</small></td>{% endif %}</tr>
+{% else %}<tr><td colspan="6" class="muted">Диалогов пока нет</td></tr>{% endfor %}
+</table>
+<script>
+const ps = document.getElementById('persona'), pt = document.getElementById('persona-text');
+ps.addEventListener('change', () => { pt.hidden = ps.value !== 'custom'; });
+</script>
+{% endblock %}

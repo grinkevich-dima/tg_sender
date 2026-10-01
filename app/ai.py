@@ -131,11 +131,14 @@ def _person(lead: dict) -> str:
     return "\n".join(parts)
 
 
-def build_messages(lead: dict, profile_id: int | None) -> tuple[list[dict], str]:
-    """Сообщения для модели и последний вопрос клиента (для примеров)."""
+def build_messages(lead: dict, profile_id: int | None, history: list[dict] | None = None,
+                   debug: dict | None = None) -> tuple[list[dict], str]:
+    """Сообщения для модели и последний вопрос клиента (для примеров).
+    history — своя переписка вместо сохранённой (тренажёр); debug — сюда кладём, что попало в запрос."""
     base = db.get_setting("ai_base_instruction")
     profile = db.one("SELECT * FROM ai_profiles WHERE id=%s", (profile_id,)) if profile_id else None
-    history = _history(lead["id"])
+    if history is None:
+        history = _history(lead["id"])
     last_in = next((r["text"] for r in reversed(history) if r["direction"] == "in"), "")
     recent = " ".join(r["text"] for r in history[-4:])
     cards = pick_cards(profile_id, recent)
@@ -147,7 +150,11 @@ def build_messages(lead: dict, profile_id: int | None) -> tuple[list[dict], str]
     if cards:
         system.append("База знаний:\n" + "\n\n".join(f"### {c['title']}\n{c['body']}" for c in cards))
     msgs = [{"role": "system", "content": "\n\n".join(system)}]
-    for ex in pick_examples(profile_id):                         # слой 3: как мы обычно отвечаем
+    examples = pick_examples(profile_id)
+    if debug is not None:
+        debug.update(profile=profile["name"] if profile else None, cards=[c["title"] for c in cards],
+                     examples=len(examples), system=msgs[0]["content"], person=_person(lead))
+    for ex in examples:                                          # слой 3: как мы обычно отвечаем
         msgs += [{"role": "user", "content": f"Клиент: {ex['question']}\n\nНапиши наш ответ."},
                  {"role": "assistant", "content": ex["answer"]}]
     msgs.append({"role": "user", "content": f"О клиенте:\n{_person(lead)}\n\nПереписка:\n{_transcript(history) or '(пока пусто)'}"
@@ -201,6 +208,13 @@ def parse_label(text: str) -> tuple[str | None, str]:
     return label, str(d.get("note") or "")[:200]
 
 
+async def classify(rows: list[dict]) -> tuple[str | None, str]:
+    """Разбор последнего сообщения клиента в переписке rows ({direction, text}, по времени)."""
+    answer = await chat([{"role": "system", "content": CLASSIFY_PROMPT},
+                         {"role": "user", "content": _transcript(rows[-8:])}], temperature=0, max_tokens=80)
+    return parse_label(answer)
+
+
 async def classify_message(message_id: int) -> str | None:
     """Размечает входящее сообщение и сохраняет метку. Ошибки ИИ не мешают приёму сообщений."""
     m = db.one("SELECT * FROM messages WHERE id=%s AND direction='in'", (message_id,))
@@ -209,13 +223,10 @@ async def classify_message(message_id: int) -> str | None:
     rows = db.q("""SELECT direction, text FROM messages WHERE lead_id=%s AND id <= %s AND COALESCE(text,'') != ''
                    ORDER BY created_at DESC, id DESC LIMIT 8""", (m["lead_id"], message_id))
     try:
-        answer = await chat([{"role": "system", "content": CLASSIFY_PROMPT},
-                             {"role": "user", "content": _transcript(list(reversed(rows)))}],
-                            temperature=0, max_tokens=80)
+        label, note = await classify(list(reversed(rows)))
     except AIError as e:
         db.log(f"Разбор входящего: {e}", "warn")
         return None
-    label, note = parse_label(answer)
     if label:
         db.ex("UPDATE messages SET ai_label=%s, ai_note=%s WHERE id=%s", (label, note, message_id))
     return label

@@ -2,8 +2,9 @@
 from fastapi import APIRouter, Form, Request
 from psycopg.errors import UniqueViolation
 
-from .. import ai, auth, db
+from .. import ai, auth, db, sandbox
 from ..config import AI_BASE_URL, AI_MODEL
+from ..templating import render
 from .common import back, page, user
 
 router = APIRouter(prefix="/ai")
@@ -155,10 +156,123 @@ async def profile_try(request: Request, pid: int, question: str = Form("")):
     if not _profile(pid) or not question.strip():
         return {"error": "Напишите вопрос клиента"}
     fake = {"id": 0, "first_name": "Ирина", "last_name": "", "title": None, "extra": {}, "stage_id": None, "note": ""}
-    msgs, _ = ai.build_messages(fake, pid)
-    msgs[-1] = {"role": "user", "content": f"О клиенте:\n{ai._person(fake)}\n\nПереписка:\nКлиент: {question.strip()}"
-                                           "\n\nНапиши наш следующий ответ."}
+    msgs, _ = ai.build_messages(fake, pid, history=[{"direction": "in", "text": question.strip()}])
     try:
         return {"text": await ai.chat(msgs)}
     except ai.AIError as e:
         return {"error": str(e)}
+
+
+# ---------- тренажёр ----------
+
+
+def _sandbox(request: Request, sid: int):
+    s = sandbox.get(sid)
+    u = user(request)
+    return s if s and (s["user_id"] == u["id"] or auth.is_admin(u)) else None
+
+
+@router.get("/sandbox")
+async def sandbox_list(request: Request):
+    u = user(request)
+    rows = db.q("""SELECT s.*, p.name AS profile_name, u.name AS user_name,
+                   (SELECT COUNT(*) FROM ai_sandbox_messages m WHERE m.sandbox_id=s.id) n,
+                   (SELECT COUNT(*) FROM ai_sandbox_messages m WHERE m.sandbox_id=s.id AND m.saved) saved
+                   FROM ai_sandboxes s LEFT JOIN ai_profiles p ON p.id=s.profile_id JOIN users u ON u.id=s.user_id
+                   WHERE %s OR s.user_id=%s ORDER BY s.id DESC LIMIT 50""", (auth.is_admin(u), u["id"]))
+    return page(request, "ai_sandbox_list.html", rows=rows, PERSONAS=sandbox.PERSONAS, ai_on=ai.configured(),
+                profiles=db.q("SELECT id, name FROM ai_profiles ORDER BY name"),
+                stages=db.q("SELECT name FROM funnel_stages ORDER BY position"),
+                pre=int(request.query_params.get("profile") or 0))
+
+
+@router.post("/sandbox/create")
+async def sandbox_create(request: Request):
+    form = await request.form()
+    pid = int(form.get("profile_id") or 0) or None
+    client = {k: (form.get(k) or "").strip() for k in ("name", "group", "joined", "stage", "note")}
+    client["name"] = client["name"] or "Ирина"
+    opening = (form.get("opening") or "").strip()
+    if not opening and form.get("campaign_opening") and pid:
+        body = db.val("""SELECT s.body FROM campaigns c JOIN campaign_steps s ON s.campaign_id=c.id AND s.position=1
+                         WHERE c.ai_profile_id=%s ORDER BY c.id DESC LIMIT 1""", (pid,))
+        if body:
+            opening = render(body, db.lead_vars(sandbox.fake_lead(client) | {"username": "", "phone": ""}))
+    sid = sandbox.create(user(request)["id"], pid, client, form.get("persona") or "interested",
+                         form.get("persona_text") or "", opening)
+    return back(f"/ai/sandbox/{sid}")
+
+
+@router.get("/sandbox/{sid}")
+async def sandbox_page(request: Request, sid: int):
+    s = _sandbox(request, sid)
+    if not s:
+        return back("/ai/sandbox", err="Диалог не найден")
+    prof = _profile(s["profile_id"]) if s["profile_id"] else None
+    return page(request, "ai_sandbox.html", s=s, msgs=sandbox.messages(sid), PERSONAS=sandbox.PERSONAS, LABELS=ai.LABELS,
+                can_save=bool(prof) and _can_edit(user(request), prof), ai_on=ai.configured(),
+                max_turns=sandbox.MAX_ROBOT_TURNS)
+
+
+@router.post("/sandbox/{sid}/say")
+async def sandbox_say(request: Request, sid: int, text: str = Form("")):
+    if not _sandbox(request, sid):
+        return {"error": "Диалог не найден"}
+    if not text.strip():
+        return {"error": "Напишите сообщение клиента"}
+    try:
+        await sandbox.client_says(sid, text)
+    except ai.AIError as e:
+        return {"error": str(e)}
+    return {"ok": True}
+
+
+@router.post("/sandbox/{sid}/robot")
+async def sandbox_robot(request: Request, sid: int, turns: int = Form(1)):
+    if not _sandbox(request, sid):
+        return {"error": "Диалог не найден"}
+    done = 0
+    try:
+        for _ in range(max(1, min(turns, sandbox.MAX_ROBOT_TURNS))):
+            if await sandbox.robot_turn(sid) is None:
+                break
+            done += 1
+    except ai.AIError as e:
+        return {"error": str(e), "turns": done}
+    return {"ok": True, "turns": done}
+
+
+@router.post("/sandbox/{sid}/retry/{mid}")
+async def sandbox_retry(request: Request, sid: int, mid: int):
+    """Переписать последний ответ бота заново."""
+    if not _sandbox(request, sid):
+        return {"error": "Диалог не найден"}
+    last = db.one("SELECT * FROM ai_sandbox_messages WHERE sandbox_id=%s ORDER BY id DESC LIMIT 1", (sid,))
+    if not last or last["id"] != mid or last["role"] != "bot":
+        return {"error": "Переписать можно только последний ответ бота"}
+    db.ex("DELETE FROM ai_sandbox_messages WHERE id=%s", (mid,))
+    try:
+        await sandbox.bot_reply(sid)
+    except ai.AIError as e:
+        return {"error": str(e)}
+    return {"ok": True}
+
+
+@router.post("/sandbox/{sid}/save/{mid}")
+async def sandbox_save(request: Request, sid: int, mid: int, corrected: str = Form("")):
+    s = _sandbox(request, sid)
+    if not s:
+        return back("/ai/sandbox", err="Диалог не найден")
+    prof = _profile(s["profile_id"]) if s["profile_id"] else None
+    if prof and not _can_edit(user(request), prof):
+        return back(f"/ai/sandbox/{sid}", err="Сохранять примеры в профиль может его автор или админ")
+    err = sandbox.save_example(sid, mid, corrected)
+    return back(f"/ai/sandbox/{sid}", err=err) if err else back(f"/ai/sandbox/{sid}", msg="Сохранено как пример профиля")
+
+
+@router.post("/sandbox/{sid}/delete")
+async def sandbox_delete(request: Request, sid: int):
+    if not _sandbox(request, sid):
+        return back("/ai/sandbox", err="Диалог не найден")
+    db.ex("DELETE FROM ai_sandboxes WHERE id=%s", (sid,))
+    return back("/ai/sandbox", msg="Диалог удалён. Сохранённые примеры остались в профиле")

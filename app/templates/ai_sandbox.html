@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/ai/sandbox" class="muted">← Тренажёр</a></p>
+<h3>Тренажёр · {{ s.profile_name or 'общая инструкция' }}</h3>
+<p class="muted">Клиент: {{ s.client.name }}{% if s.client.group %}, «{{ s.client.group }}»{% endif %}{% if s.client.stage %}, этап «{{ s.client.stage }}»{% endif %}
+  · робот: {{ s.persona_text if s.persona == 'custom' and s.persona_text else PERSONAS.get(s.persona, ['?'])[0] }} · в Telegram ничего не уходит</p>
+
+<div class="chat" id="chat" style="max-height:62vh">
+  {% for m in msgs %}
+  <div class="msg {{ 'in' if m.role == 'client' else 'out' }}">
+    <span class="t">{{ m.text }}</span>
+    {% if m.role == 'client' %}
+      <span class="meta">клиент{{ '-робот' if m.by_robot else '' }}{% if m.label %} · ИИ: <b>{{ LABELS[m.label] }}</b>{% if m.note %} — {{ m.note }}{% endif %}{% endif %}</span>
+    {% else %}
+      <span class="meta">бот{% if m.saved %} · ✅ пример профиля{% endif %}{% if m.debug and m.debug.original %} · исправлено{% endif %}</span>
+      {% if m.debug %}
+      <span class="meta">
+        {% if can_save and not m.saved %}<a href="#" data-save="{{ m.id }}">👍 сохранить пример</a> · <a href="#" data-fix="{{ m.id }}">✏️ исправить</a> · {% endif %}
+        {% if loop.last %}<a href="#" data-retry="{{ m.id }}">↻ другой ответ</a> · {% endif %}
+        <a href="#" data-debug="{{ m.id }}">что видел ИИ</a></span>
+      <div class="dbg" id="dbg-{{ m.id }}" hidden style="font-size:.78em;margin-top:.4rem">
+        <b>Профиль:</b> {{ m.debug.profile or 'нет' }} · <b>примеров:</b> {{ m.debug.examples }} ·
+        <b>карточки:</b> {{ m.debug.cards|join(', ') or 'нет' }}<br><b>Клиент:</b> {{ m.debug.person }}
+        <details><summary>Полная инструкция</summary><pre class="tpl">{{ m.debug.system }}</pre></details>
+        {% if m.debug.original %}<details><summary>Ответ бота до исправления</summary><pre class="tpl">{{ m.debug.original }}</pre></details>{% endif %}
+      </div>
+      <form method="post" action="/ai/sandbox/{{ s.id }}/save/{{ m.id }}" id="fix-{{ m.id }}" hidden style="margin-top:.4rem">
+        <textarea name="corrected" rows="3">{{ m.text }}</textarea>
+        <button style="width:auto">Сохранить исправленный как пример</button>
+      </form>
+      {% endif %}
+    {% endif %}
+  </div>
+  {% else %}<p class="muted">Диалог пуст — напишите первое сообщение клиента или включите робота.</p>{% endfor %}
+</div>
+
+<div style="margin-top:.6rem">
+  <textarea id="say" rows="2" placeholder="Напишите как клиент… (Ctrl+Enter — отправить)"></textarea>
+  <div class="row-actions">
+    <button id="say-btn" {% if not ai_on %}disabled{% endif %}>Отправить как клиент</button>
+    <button class="outline" id="robot-btn" {% if not ai_on %}disabled{% endif %}>🤖 Ход клиента-робота</button>
+    <select id="turns" style="width:auto;display:inline-block;margin:0;padding:.3rem .6rem;font-size:.85em">
+      {% for n in range(1, max_turns + 1) %}<option value="{{ n }}">{{ n }} {{ 'ход' if n == 1 else 'хода' if n < 5 else 'ходов' }}</option>{% endfor %}
+    </select>
+    <small class="muted" id="busy"></small>
+  </div>
+</div>
+{% if not can_save and s.profile_id %}<small class="muted">Сохранять примеры в профиль может его автор или админ.</small>{% endif %}
+<form method="post" action="/ai/sandbox/{{ s.id }}/delete" style="margin-top:1rem" onsubmit="return confirm('Удалить диалог? Сохранённые примеры останутся')">
+  <button class="outline secondary" style="width:auto">Удалить диалог</button></form>
+
+<script>
+(function(){
+  const chat = document.getElementById('chat'); chat.scrollTop = chat.scrollHeight;
+  const busy = document.getElementById('busy'), say = document.getElementById('say');
+  async function call(url, data, label) {
+    for (const b of document.querySelectorAll('#say-btn,#robot-btn')) b.disabled = true;
+    busy.textContent = label;
+    try {
+      const body = new FormData(); for (const [k, v] of Object.entries(data || {})) body.append(k, v);
+      const j = await (await fetch(url, {method: 'POST', body})).json();
+      if (j.error) { busy.textContent = j.error; for (const b of document.querySelectorAll('#say-btn,#robot-btn')) b.disabled = false; return; }
+      location.reload();
+    } catch (e) { busy.textContent = 'Ошибка связи'; }
+  }
+  document.getElementById('say-btn').addEventListener('click', () => {
+    if (say.value.trim()) call('/ai/sandbox/{{ s.id }}/say', {text: say.value}, 'Бот думает…');
+  });
+  say.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) document.getElementById('say-btn').click(); });
+  document.getElementById('robot-btn').addEventListener('click', () => {
+    const n = document.getElementById('turns').value;
+    call('/ai/sandbox/{{ s.id }}/robot', {turns: n}, `Клиент-робот и бот переписываются (${n})…`);
+  });
+  chat.addEventListener('click', e => {
+    const a = e.target.closest('a'); if (!a) return;
+    e.preventDefault();
+    if (a.dataset.debug) document.getElementById('dbg-' + a.dataset.debug).hidden ^= true;
+    if (a.dataset.fix) document.getElementById('fix-' + a.dataset.fix).hidden ^= true;
+    if (a.dataset.retry) call('/ai/sandbox/{{ s.id }}/retry/' + a.dataset.retry, {}, 'Бот переписывает ответ…');
+    if (a.dataset.save) { const f = document.getElementById('fix-' + a.dataset.save); f.querySelector('textarea').value = ''; f.submit(); }
+  });
+})();
+</script>
+{% endblock %}
