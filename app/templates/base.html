@@ -32,6 +32,26 @@
   nav.top form { display:inline; margin:0; } nav.top form button { padding:.2rem .6rem; font-size:.8em; width:auto; margin:0; }
   .acc-chips label { display:inline-flex; gap:.3rem; margin-right:1rem; }
   .reply { border-left: 3px solid #86efac; padding-left:.6rem; margin:.4rem 0; }
+  .inbox { display:grid; grid-template-columns: minmax(260px, 340px) 1fr; gap:1rem; align-items:start; }
+  @media (max-width: 800px) { .inbox { grid-template-columns: 1fr; } .inbox.has-dialog .dlg-list { display:none; } }
+  .dlg-list { border:1px solid var(--pico-muted-border-color); border-radius:8px; max-height:75vh; overflow:auto; }
+  .dlg-item { display:block; padding:.55rem .7rem; border-bottom:1px solid var(--pico-muted-border-color); text-decoration:none; color:inherit; }
+  .dlg-item:hover { background: rgba(127,127,127,.08); }
+  .dlg-item.active { background: #e0ecff; box-shadow: inset 3px 0 0 var(--pico-primary); }
+  .dlg-item .top { display:flex; justify-content:space-between; gap:.5rem; }
+  .dlg-item .preview { color:var(--pico-muted-color); font-size:.85em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .dlg-item.unread b { font-weight:700; } .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#16a34a; margin-right:.3rem; }
+  .chat { border:1px solid var(--pico-muted-border-color); border-radius:8px; padding:.8rem; max-height:60vh; overflow:auto; display:flex; flex-direction:column; gap:.4rem; }
+  .msg { max-width:78%; padding:.45rem .7rem; border-radius:10px; font-size:.92em; }
+  .msg .t { white-space:pre-wrap; }
+  .msg.in { align-self:flex-start; background:var(--pico-muted-border-color); }
+  .msg.out { align-self:flex-end; background:#dbeafe; color:#1e3a8a; }
+  .msg .meta { display:block; font-size:.72em; opacity:.7; margin-top:.2rem; }
+  .stage { padding:1px 7px; border-radius:9px; font-size:.75em; background:#f1f5f9; color:#334155; white-space:nowrap; }
+  .stage.goal { background:#dcfce7; color:#14532d; } .stage.lost { background:#fee2e2; color:#7f1d1d; }
+  .funnel { display:flex; flex-wrap:wrap; gap:.4rem; margin:.5rem 0 1rem; }
+  .funnel div { border:1px solid var(--pico-muted-border-color); border-radius:8px; padding:.35rem .7rem; font-size:.85em; }
+  .funnel b { font-size:1.15em; margin-left:.3rem; }
   .tab-bar { display:flex; flex-wrap:wrap; justify-content:flex-start; gap:.25rem; border-bottom:1px solid var(--pico-muted-border-color); margin:-.25rem 0 1rem; }
   .tab-bar button { width:auto; margin:0; padding:.45rem .9rem; font-size:.9em; background:none; border:none; border-bottom:2px solid transparent;
                     border-radius:0; color:var(--pico-muted-color); }
@@ -55,6 +75,7 @@
   {% if user %}
   <ul>
     <li><a href="/">Дашборд</a></li>
+    <li><a href="/inbox">Инбокс{% if menu_unread %} <span class="badge b-replied" id="menu-unread">{{ menu_unread }}</span>{% endif %}</a></li>
     <li><a href="/campaigns">Кампании</a></li>
     <li><a href="/segments">Сегменты</a></li>
     <li><a href="/chat-search">Поиск групп</a></li>

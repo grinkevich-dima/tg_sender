@@ -7,7 +7,7 @@ from telethon import TelegramClient, errors, events, utils
 from telethon.tl.functions.contacts import GetContactsRequest
 from telethon.tl.types import User
 
-from . import db, leads
+from . import db, inbox, leads
 from .config import API_HASH, API_ID, SESSIONS_DIR
 
 # Точка расширения: сюда подключится ИИ-разбор ответов.
@@ -423,16 +423,30 @@ class AccountClient:
         async def on_incoming(event):
             await self.handle_incoming(event.sender_id, event.raw_text, event.id, event)
 
+        @c.on(events.NewMessage(outgoing=True, func=lambda e: e.is_private))
+        async def on_outgoing(event):
+            # менеджер написал лиду прямо в Telegram — сохраняем в историю инбокса
+            self.handle_outgoing(event.chat_id, event.raw_text, event.id)
+
         @c.on(events.MessageRead(inbox=False))
         async def on_read(event):
             # собеседник прочитал наши сообщения до max_id включительно
             self._mark_read(event.chat_id, event.max_id)
 
+    def handle_outgoing(self, peer_id: int, text: str | None, tg_message_id: int | None) -> bool:
+        """Своё сообщение лиду, отправленное не из панели. Пишем только лидам из базы, закреплённым за этим аккаунтом
+        (или ещё ни за кем) — чужие личные переписки менеджера панель не собирает."""
+        lead = db.one("SELECT * FROM leads WHERE tg_id=%s AND (owner_account_id=%s OR owner_account_id IS NULL)",
+                      (peer_id, self.id))
+        if not lead:
+            return False
+        return inbox.record(self.id, lead["id"], "out", text, tg_message_id, "telegram")
+
     async def handle_incoming(self, uid: int, text: str | None, tg_message_id: int | None, event=None):
         lead = db.one("SELECT * FROM leads WHERE tg_id=%s", (uid,))
         if lead:
-            db.ex("""INSERT INTO messages(account_id, lead_id, direction, tg_message_id, text)
-                     VALUES (%s, %s, 'in', %s, %s)""", (self.id, lead["id"], tg_message_id, text))
+            inbox.record(self.id, lead["id"], "in", text, tg_message_id, "incoming")
+            inbox.auto_stage(lead["id"], "replied")
             db.ex("""UPDATE campaign_leads SET state='replied', replied_at=now()
                      WHERE lead_id=%s AND account_id=%s AND state IN ('sent', 'read')""", (lead["id"], self.id))
         if leads.is_stop_message(text, db.get_setting("stop_words")):

@@ -1,7 +1,7 @@
 """Дашборд, общие настройки команды, журнал, профиль."""
 from fastapi import APIRouter, Form, Request
 
-from .. import auth, db, worker
+from .. import auth, db, inbox, worker
 from ..campaigns import recontact_days
 from ..tg import configured, tgm
 from .common import back, log_rows, page, user
@@ -34,7 +34,8 @@ async def dashboard(request: Request):
                       FROM messages m JOIN leads l ON l.id=m.lead_id JOIN tg_accounts a ON a.id=m.account_id
                       WHERE m.direction='in' AND (%s OR a.user_id=%s) ORDER BY m.id DESC LIMIT 10""",
                    (auth.is_admin(u), u["id"]))
-    return page(request, "dashboard.html", accs=accs, camps=camps, replies=replies, configured=configured(),
+    funnel = inbox.funnel(None if auth.is_admin(u) else [a["id"] for a in accs])
+    return page(request, "dashboard.html", accs=accs, camps=camps, replies=replies, configured=configured(), funnel=funnel,
                 leads_n=db.val("SELECT COUNT(*) FROM leads"),
                 log=log_rows(15, None if auth.is_admin(u) else [a["id"] for a in accs]))
 
@@ -54,7 +55,7 @@ async def settings_page(request: Request):
     if not auth.is_admin(user(request)):
         return back("/", err="Общие настройки меняет админ. Лимиты своего аккаунта — в разделе «Аккаунты»")
     return page(request, "settings.html", stop_words=db.get_setting("stop_words"),
-                recontact_days=recontact_days())
+                recontact_days=recontact_days(), stages=inbox.funnel())
 
 
 @router.post("/settings")
@@ -81,3 +82,44 @@ async def log_page(request: Request):
 @router.get("/me")
 async def me_page(request: Request):
     return page(request, "me.html")
+
+
+# ---------- этапы воронки (админ) ----------
+@router.post("/settings/stages/add")
+async def stage_add(request: Request, name: str = Form("")):
+    if not auth.is_admin(user(request)):
+        return back("/", err="Только админ")
+    name = name.strip()[:60]
+    if not name or db.one("SELECT 1 FROM funnel_stages WHERE lower(name)=lower(%s)", (name,)):
+        return back("/settings", err="Укажите новое название этапа")
+    pos = (db.val("SELECT MAX(position) FROM funnel_stages WHERE NOT is_lost") or 0) + 1
+    db.ex("UPDATE funnel_stages SET position=position+1 WHERE position >= %s", (pos,))   # отказ остаётся последним
+    db.ex("INSERT INTO funnel_stages(name, position) VALUES (%s, %s)", (name, pos))
+    return back("/settings", msg=f"Этап «{name}» добавлен")
+
+
+@router.post("/settings/stages/{sid}")
+async def stage_save(request: Request, sid: int, name: str = Form(""), position: str = Form(""),
+                     is_goal: str = Form(""), is_lost: str = Form("")):
+    if not auth.is_admin(user(request)):
+        return back("/", err="Только админ")
+    name = name.strip()[:60]
+    if not name or not position.lstrip("-").isdigit():
+        return back("/settings", err="Название и порядок этапа обязательны")
+    if db.one("SELECT 1 FROM funnel_stages WHERE lower(name)=lower(%s) AND id!=%s", (name, sid)):
+        return back("/settings", err="Этап с таким названием уже есть")
+    db.ex("UPDATE funnel_stages SET name=%s, position=%s, is_goal=%s, is_lost=%s WHERE id=%s",
+          (name, int(position), bool(is_goal), bool(is_lost), sid))
+    return back("/settings", msg="Этап сохранён")
+
+
+@router.post("/settings/stages/{sid}/delete")
+async def stage_delete(request: Request, sid: int):
+    if not auth.is_admin(user(request)):
+        return back("/", err="Только админ")
+    st = db.one("SELECT * FROM funnel_stages WHERE id=%s", (sid,))
+    if not st or st["auto"]:
+        return back("/settings", err="Этапы «написали» и «ответил» ставятся автоматически — их можно переименовать, но не удалить")
+    n = db.val("SELECT COUNT(*) FROM leads WHERE stage_id=%s", (sid,))
+    db.ex("DELETE FROM funnel_stages WHERE id=%s", (sid,))
+    return back("/settings", msg=f"Этап «{st['name']}» удалён" + (f"; у {n} лидов этап сброшен" if n else ""))

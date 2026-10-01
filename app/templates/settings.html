@@ -10,5 +10,27 @@
 </article>
 <button>Сохранить</button>
 </form>
+<article>
+<header><strong>Этапы воронки</strong> <small class="muted">· «написали» и «ответил» ставятся сами при отправке и ответе</small></header>
+<table>
+<thead><tr><th>Порядок</th><th>Название</th><th>Цель</th><th>Отказ</th><th>Лидов</th><th></th></tr></thead>
+{% for s in stages %}
+<tr>
+  <td style="width:90px"><input type="number" name="position" value="{{ s.position }}" form="stage-{{ s.id }}" style="margin:0"></td>
+  <td><input name="name" value="{{ s.name }}" maxlength="60" form="stage-{{ s.id }}" style="margin:0">{% if s.auto %}<small class="muted">авто</small>{% endif %}</td>
+  <td><input type="checkbox" name="is_goal" value="1" form="stage-{{ s.id }}" {% if s.is_goal %}checked{% endif %}></td>
+  <td><input type="checkbox" name="is_lost" value="1" form="stage-{{ s.id }}" {% if s.is_lost %}checked{% endif %}></td>
+  <td>{{ s.n }}</td>
+  <td class="row-actions"><form method="post" action="/settings/stages/{{ s.id }}" id="stage-{{ s.id }}"><button class="outline">Сохранить</button></form>
+    {% if not s.auto %}<form method="post" action="/settings/stages/{{ s.id }}/delete" onsubmit="return confirm('Удалить этап? У лидов на нём этап сбросится')"><button class="outline secondary">✕</button></form>{% endif %}</td>
+</tr>
+{% endfor %}
+</table>
+<form method="post" action="/settings/stages/add" class="grid">
+  <input name="name" placeholder="Новый этап, напр. «на консультации»" maxlength="60" required>
+  <button class="outline">Добавить этап</button>
+</form>
+<small class="muted">«Цель» — этап, ради которого ведётся работа (например, «пришёл / купил»): по нему будут считаться отчёты.</small>
+</article>
 <p class="muted">Лимиты, прогрев и рабочие часы у каждого аккаунта свои — в разделе <a href="/accounts">«Аккаунты»</a>.</p>
 {% endblock %}

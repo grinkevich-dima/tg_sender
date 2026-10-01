@@ -23,6 +23,7 @@
 | `app/auth.py` | пользователи и пароли (scrypt), роли, cookie-сессия, защита от CSRF, перенос старой сессии |
 | `app/leads.py` | поиск дубликатов, импорт CSV и из Telegram (с добавлением в сегмент), стоп-слова, отписка |
 | `app/segments.py` | сегменты: создание, наполнение по тегу, счётчики |
+| `app/inbox.py` | инбокс и воронка: запись сообщений без дублей, автоэтапы, счётчик непрочитанных, сводка по этапам |
 | `app/chat_search.py` | поиск групп: запросы из слов и мест, группы обсуждения каналов, проверка ссылок, оценка 0–100 |
 | `app/campaigns.py` | импорт xlsx, кампании по шаблону, фильтры, очередь, распределение лидов по аккаунтам |
 | `app/tg.py` | `AccountClient`: вход (код, 2FA, QR), поиск адресата, «Найти получателей», обработчики событий; `TgPool` — все аккаунты |
@@ -37,7 +38,7 @@
 |---|---|
 | `users` | команда: логин, имя, хэш пароля, роль, активен |
 | `tg_accounts` | аккаунты Telegram: владелец-менеджер, данные профиля, статус, лимиты, прогрев, рабочие часы, `paused_until` |
-| `leads` | люди и чаты: `tg_id`, `username`, `phone` (уникальны), имя, `extra` (переменные), `tags[]`, **`owner_account_id`**, `opted_out_at` |
+| `leads` | люди и чаты: `tg_id`, `username`, `phone` (уникальны), имя, `extra` (переменные), `tags[]`, **`owner_account_id`**, `opted_out_at`, этап воронки `stage_id`, заметка `note`, `inbox_read_at` |
 | `templates` | библиотека текстов |
 | `chat_searches` | темы поиска групп: слова, места, стоп-слова, аккаунт, состояние |
 | `found_chats` | найденные группы: ID/username/приглашение, канал для групп обсуждения (`parent_username`, `parent_title`), описание, участники, активность, язык, совпадения, стоп-слово, оценка, статус |
@@ -47,7 +48,8 @@
 | `campaign_accounts` | с каких аккаунтов идёт кампания |
 | `campaign_steps` | текст шага (сейчас шаг 1; дожимы — следующий этап) |
 | `campaign_leads` | лид в кампании: аккаунт, состояние, свой текст из xlsx, тема форума, поля файла для фильтров, ошибка, время отправки/прочтения/ответа |
-| `messages` | вся переписка: исходящие из кампаний и входящие ответы |
+| `messages` | вся переписка: `source` — кампания / из панели (`inbox`) / вручную в Telegram / входящее, `sender_user_id`; одно сообщение Telegram — одна строка |
+| `funnel_stages` | этапы воронки: порядок, цель, отказ, `auto` (`contacted` / `replied` — ставятся сами) |
 | `tg_dialogs` | снимок диалогов аккаунта: поиск чатов по названию, «есть ли переписка», группы для сегментов (`is_admin`, `members`, `username` для ссылки t.me, `last_message_id` для ссылки в приложение) |
 | `settings` | правила команды: стоп-слова, `recontact_days` |
 | `event_log` | журнал |
@@ -79,7 +81,8 @@
 
 ## События Telegram
 
-- `NewMessage(incoming, private)` → запись в `messages`, «ответил» у строк этого аккаунта; стоп-слово → отписка лида для всей команды; затем хуки `incoming_hooks`.
+- `NewMessage(outgoing, private)` → своё сообщение лиду, написанное прямо в Telegram, сохраняется в `messages` (только лидам этого аккаунта).
+- `NewMessage(incoming, private)` → запись в `messages`, этап «ответил», «ответил» у строк кампаний этого аккаунта; стоп-слово → отписка лида для всей команды; затем хуки `incoming_hooks`.
 - `MessageRead(outbox)` → «прочитано» у строк этого аккаунта до `max_id`.
 - Досинхронизация прочтений (`refresh_reads`) — раз в 30 мин и по кнопке.
 
@@ -95,6 +98,7 @@
 | Команда | `/users`, `/users/create`, `/users/{id}/toggle`, `/users/{id}/password` |
 | Аккаунты | `/accounts`, `/accounts/create`, `/accounts/{id}` (настройки), `/accounts/{id}/login`, `/phone`, `/code`, `/password`, `/qr`, `/qr/status`, `/qr/done`, `/logout`, `/pause`, `/resume`, `/import`, `/delete` |
 | Лиды | `/leads`, `/leads/import-csv`, `/leads/{id}/optout`, `/leads/delete` |
+| Инбокс | `/inbox`, `/inbox/unread`, `/inbox/{lead_id}`, `/messages`, `/send`, `/stage`, `/note`, `/optout`; этапы — `/settings/stages/add`, `/settings/stages/{id}`, `/settings/stages/{id}/delete` |
 | Поиск групп | `/chat-search`, `/chat-search/create`, `/chat-search/links`, `/chat-search/state`, `/chat-search/{id}/rerun`, `/chat-search/{id}/delete`, `/chat-search/found/{id}/{status}` |
 | Сегменты | `/segments`, `/segments/create`, `/segments/{id}`, `/import-csv`, `/import-tg`, `/add-tag`, `/refresh-groups`, `/import-group`, `/remove/{lead_id}`, `/edit`, `/delete` |
 | Шаблоны | `/templates`, `/templates/save`, `/templates/{id}/test`, `/templates/{id}/delete` |

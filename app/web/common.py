@@ -59,8 +59,12 @@ def page(request: Request, name: str, **ctx):
         except ValueError:
             flash = {}
     user = auth.current_user(request)
+    unread = 0
+    if user:
+        from .. import inbox
+        unread = inbox.unread_count(None if auth.is_admin(user) else [a["id"] for a in auth.user_accounts(user)])
     resp = templates.TemplateResponse(request, name, {"user": user, "is_admin": auth.is_admin(user),
-                                                      "flash": flash, **ctx})
+                                                      "flash": flash, "menu_unread": unread, **ctx})
     if raw:
         resp.delete_cookie(FLASH_COOKIE, path="/")
     return resp

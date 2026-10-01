@@ -9,6 +9,7 @@
   <div class="stat"><small>Уже писали</small><b>{{ stats.contacted or 0 }}</b></div>
   <div class="stat"><small>Отписаны</small><b>{{ stats.opted_out or 0 }}</b></div>
 </div>
+{% if funnel|sum(attribute='n') %}<div class="funnel">{% for s in funnel %}<div>{{ s.name }}<b>{{ s.n }}</b></div>{% endfor %}</div>{% endif %}
 <p><a href="/campaigns" role="button" class="outline" style="width:auto">➕ Кампания по этому сегменту</a>
   <a href="/leads?segment={{ seg.id }}" style="margin-left:1rem">открыть в «Лидах»</a></p>
 

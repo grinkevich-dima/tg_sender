@@ -14,9 +14,12 @@
   <div class="stat"><small>Лидов в базе</small><b>{{ leads_n }}</b></div>
 </div>
 
+<h4>Воронка <a href="/inbox" style="font-size:.7em">инбокс</a></h4>
+<div class="funnel">{% for s in funnel %}<div class="{{ 'goal' if s.is_goal else '' }}">{{ s.name }}<b>{{ s.n }}</b></div>{% endfor %}</div>
+
 <h4>Новые ответы</h4>
 {% for m in replies %}
-<div class="reply"><small class="muted">{{ m.created_at|dt }} · {{ m.acc_label }} ←</small>
+<div class="reply"><small class="muted">{{ m.created_at|dt }} · {{ m.acc_label }} ← <a href="/inbox/{{ m.lead_id }}">ответить</a></small>
   <b>{{ m.title or ((m.first_name ~ ' ' ~ m.last_name)|trim) or ('@' ~ m.username) }}</b>: {{ (m.text or '')[:200] }}</div>
 {% else %}<p class="muted">Пока нет ответов</p>{% endfor %}
 

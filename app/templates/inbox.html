@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block content %}
+{% macro stage_badge(name, goal, lost) %}{% if name %}<span class="stage {{ 'goal' if goal else ('lost' if lost else '') }}">{{ name }}</span>{% endif %}{% endmacro %}
+<h3>Инбокс {% if unread_n %}<small class="muted" style="font-size:.6em">· непрочитанных диалогов: {{ unread_n }}</small>{% endif %}</h3>
+
+<form method="get" action="{{ '/inbox/' ~ lead.id if lead else '/inbox' }}" class="fbar">
+  <select name="show" style="width:auto;margin:0">
+    <option value="all" {% if f.show=='all' %}selected{% endif %}>Все диалоги</option>
+    <option value="waiting" {% if f.show=='waiting' %}selected{% endif %}>Ждут ответа</option>
+    <option value="unread" {% if f.show=='unread' %}selected{% endif %}>Непрочитанные</option>
+  </select>
+  <select name="stage" style="width:auto;margin:0">
+    <option value="0">Все этапы</option>
+    {% for s in stages %}<option value="{{ s.id }}" {% if f.stage==s.id %}selected{% endif %}>{{ s.name }}</option>{% endfor %}
+    <option value="-1" {% if f.stage==-1 %}selected{% endif %}>без этапа</option>
+  </select>
+  <select name="segment" style="width:auto;margin:0">
+    <option value="0">Все сегменты</option>
+    {% for s in segs %}<option value="{{ s.id }}" {% if f.segment==s.id %}selected{% endif %}>{{ s.name }}</option>{% endfor %}
+  </select>
+  {% if is_admin %}<label style="margin:0"><input type="checkbox" name="mine" value="1" {% if f.mine %}checked{% endif %}> мои</label>{% endif %}
+  <input name="q" value="{{ f.q }}" placeholder="Имя, username" class="fsearch">
+  <button class="outline" style="width:auto;margin:0;padding:.35rem .9rem">Показать</button>
+</form>
+
+<div class="inbox {{ 'has-dialog' if lead else '' }}">
+  <div class="dlg-list">
+    {% for d in rows %}
+    <a class="dlg-item {{ 'unread' if d.unread else '' }} {{ 'active' if lead and lead.id == d.id else '' }}" href="/inbox/{{ d.id }}{{ '?' ~ qs if qs else '' }}">
+      <div class="top"><b>{% if d.unread %}<span class="dot"></span>{% endif %}{{ d.title or ((d.first_name ~ ' ' ~ d.last_name)|trim) or ('@' ~ d.username if d.username else '#' ~ d.id) }}</b>
+        <small class="muted">{{ d.last_at|dt }}</small></div>
+      <div class="preview">{{ 'Вы: ' if d.last_dir == 'out' else '' }}{{ (d.last_text or '')[:90] }}</div>
+      <small>{{ stage_badge(d.stage_name, d.is_goal, d.is_lost) }} <span class="muted">{{ d.acc_label or '' }}</span></small>
+    </a>
+    {% else %}<p class="muted" style="padding:.8rem">Диалогов нет. Они появятся, когда лиды ответят на сообщения кампаний.</p>{% endfor %}
+    {% if total > f.p * per_page %}<a class="dlg-item" href="?{{ qs }}&p={{ f.p + 1 }}">Ещё →</a>{% endif %}
+  </div>
+
+  <div>
+  {% if lead %}
+    <p style="margin-bottom:.4rem"><a href="/inbox{{ '?' ~ qs if qs else '' }}" class="muted">← к списку</a></p>
+    <h4 style="margin-bottom:.2rem">{{ lead.title or ((lead.first_name ~ ' ' ~ lead.last_name)|trim) or '—' }}
+      {% if lead.username %}<small><a href="https://t.me/{{ lead.username }}" target="_blank" rel="noopener">@{{ lead.username }}</a></small>{% endif %}</h4>
+    {% if lead.opted_out_at %}<div class="flash err">Лид отписался ({{ lead.opt_out_reason or '' }}) — писать ему нельзя.</div>{% endif %}
+
+    <div class="chat" id="chat">
+      {% for m in msgs %}
+      {% set src = [] %}{% if m.direction == 'out' %}{% set _ = src.append(SOURCE_RU.get(m.source, '') ~ (' «' ~ m.campaign_name ~ '»' if m.campaign_name else '')) %}{% if m.sender_name %}{% set _ = src.append(m.sender_name) %}{% endif %}{% endif %}
+      <div class="msg {{ m.direction }}" data-id="{{ m.id }}"><span class="t">{{ m.text or '—' }}</span><span class="meta">{{ ([m.created_at|dt] + src|select|list)|join(' · ') }}</span></div>
+      {% endfor %}
+    </div>
+
+    {% if not lead.opted_out_at %}
+    <form method="post" action="/inbox/{{ lead.id }}/send{{ '?' ~ qs if qs else '' }}" style="margin-top:.6rem">
+      <textarea name="text" rows="3" required placeholder="Ответ уйдёт от аккаунта «{{ card.account.label or card.account.first_name if card.account else '—' }}»… (Ctrl+Enter — отправить)" id="reply"></textarea>
+      <button style="width:auto">Отправить</button>
+    </form>
+    {% endif %}
+
+    <article style="margin-top:1rem">
+      <div class="grid">
+        <form method="post" action="/inbox/{{ lead.id }}/stage{{ '?' ~ qs if qs else '' }}">
+          <label>Этап воронки
+            <select name="stage_id" onchange="this.form.submit()">
+              <option value="0">— без этапа —</option>
+              {% for s in stages %}<option value="{{ s.id }}" {% if lead.stage_id == s.id %}selected{% endif %}>{{ s.name }}</option>{% endfor %}
+            </select></label>
+          {% if lead.stage_changed_at %}<small class="muted">изменён {{ lead.stage_changed_at|dt }}</small>{% endif %}
+        </form>
+        <div><small class="muted">Аккаунт</small><br>{{ (card.account.label or card.account.first_name) if card.account else '—' }}
+          {% if lead.extra.group %}<br><small class="muted">Группа:</small> {{ lead.extra.group }}{% if lead.extra.joined %}, с {{ lead.extra.joined }}{% endif %}{% endif %}</div>
+      </div>
+      <form method="post" action="/inbox/{{ lead.id }}/note{{ '?' ~ qs if qs else '' }}">
+        <label>Заметка <textarea name="note" rows="2" placeholder="Что важно помнить об этом человеке">{{ lead.note }}</textarea></label>
+        <button class="outline" style="width:auto">Сохранить заметку</button>
+      </form>
+      <small>
+        {% if card.segments %}<span class="muted">Сегменты:</span> {% for s in card.segments %}<a href="/segments/{{ s.id }}">{{ s.name }}</a>{{ ', ' if not loop.last }}{% endfor %}<br>{% endif %}
+        {% if card.campaigns %}<span class="muted">Кампании:</span> {% for c in card.campaigns %}<a href="/campaigns/{{ c.id }}">{{ c.name }}</a> ({{ STATE_RU.get(c.state, c.state) }}){{ ', ' if not loop.last }}{% endfor %}<br>{% endif %}
+        {% if lead.tags %}<span class="muted">Теги:</span> {{ lead.tags|join(', ') }}{% endif %}
+      </small>
+      {% if not lead.opted_out_at %}
+      <form method="post" action="/inbox/{{ lead.id }}/optout{{ '?' ~ qs if qs else '' }}" onsubmit="return confirm('Отписать лида? Команда больше не сможет ему писать')" style="margin-top:.6rem">
+        <button class="outline secondary" style="width:auto">Отписать</button>
+      </form>
+      {% endif %}
+    </article>
+  {% else %}
+    <p class="muted">Выберите диалог слева.</p>
+  {% endif %}
+  </div>
+</div>
+
+<script>
+(function(){
+  const chat = document.getElementById('chat');
+  if (chat) chat.scrollTop = chat.scrollHeight;
+  const reply = document.getElementById('reply');
+  if (reply) reply.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) reply.form.requestSubmit(); });
+  {% if lead %}
+  // новые сообщения диалога — без перезагрузки
+  let last = {{ last_id }};
+  setInterval(async () => {
+    try {
+      const j = await (await fetch('/inbox/{{ lead.id }}/messages?after=' + last)).json();
+      for (const m of j.messages) {
+        const div = document.createElement('div');
+        div.className = 'msg ' + m.direction;
+        const t = document.createElement('span'); t.className = 't'; t.textContent = m.text || '—'; div.appendChild(t);
+        const meta = document.createElement('span'); meta.className = 'meta'; meta.textContent = m.created_at;
+        div.appendChild(meta); chat.appendChild(div); last = Math.max(last, m.id);
+        chat.scrollTop = chat.scrollHeight;
+      }
+    } catch (e) {}
+  }, 5000);
+  {% else %}
+  // список: если пришли новые ответы — обновляем
+  let unread = {{ unread_n }};
+  setInterval(async () => {
+    try { const j = await (await fetch('/inbox/unread')).json(); if (j.unread !== unread) location.reload(); } catch (e) {}
+  }, 15000);
+  {% endif %}
+})();
+</script>
+{% endblock %}

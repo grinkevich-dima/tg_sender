@@ -5,7 +5,7 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 from psycopg.errors import UniqueViolation
 from telethon import errors
 
-from .. import auth, db, leads, segments
+from .. import auth, db, inbox, leads, segments
 from ..tg import tgm
 from .common import back, page, user
 
@@ -58,6 +58,7 @@ async def segment_view(request: Request, sid: int, s: str = "", p: int = 1):
                      WHERE d.is_admin AND d.account_id = ANY(%s) ORDER BY d.title""", (acc_ids,))
     return page(request, "segment.html", seg=seg, rows=rows, total=total, s=s, p=p, per_page=PER_PAGE, stats=stats,
                 can_edit=_can_edit(u, seg), tags=leads.all_tags(), accounts=accounts, groups=groups,
+                funnel=inbox.funnel(segment_id=sid),
                 groups_state={a: tgm.groups_state.get(a) for a in acc_ids if tgm.groups_state.get(a)})
 
 

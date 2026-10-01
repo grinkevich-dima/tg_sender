@@ -43,6 +43,11 @@ def database():
 @pytest.fixture(autouse=True)
 def clean():
     db.ex(f"TRUNCATE {', '.join(TABLES)} RESTART IDENTITY CASCADE")
+    db.ex("""DELETE FROM funnel_stages WHERE id NOT IN (SELECT id FROM funnel_stages ORDER BY id LIMIT 6);
+             UPDATE funnel_stages SET name=v.name, position=v.pos, is_goal=v.goal, is_lost=v.lost FROM (VALUES
+               (1,'написали',1,false,false),(2,'ответил',2,false,false),(3,'интерес',3,false,false),
+               (4,'записался',4,false,false),(5,'пришёл / купил',5,true,false),(6,'отказ',6,false,true)) v(id,name,pos,goal,lost)
+             WHERE funnel_stages.id=v.id""")
     for k, v in db.DEFAULT_SETTINGS.items():
         db.set_setting(k, v)
     tgm.accounts.clear()

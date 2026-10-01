@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 
 from telethon import errors
 
-from . import campaigns, db
+from . import campaigns, db, inbox
 from .tg import AccountClient, tgm
 
 state: dict[int, dict] = {}                 # account_id → {"status", "next_send_at"}
@@ -285,8 +285,8 @@ async def send_item(item: dict) -> str:
     with db.tx():
         db.ex("""UPDATE campaign_leads SET state='sent', tg_message_id=%s, sent_at=now(), sent_day=%s, error=NULL
                  WHERE id=%s""", (sent.id, db.today(), cl_id))
-        db.ex("""INSERT INTO messages(account_id, lead_id, campaign_lead_id, direction, tg_message_id, text)
-                 VALUES (%s, %s, %s, 'out', %s, %s)""", (account_id, lead["id"], cl_id, sent.id, text))
+        inbox.record(account_id, lead["id"], "out", text, sent.id, "campaign", campaign_lead_id=cl_id)
+        inbox.auto_stage(lead["id"], "contacted")
         db.ex("UPDATE leads SET owner_account_id=%s WHERE id=%s AND owner_account_id IS NULL", (account_id, lead["id"]))
         db.ex("UPDATE tg_accounts SET warmup_start_date=%s WHERE id=%s AND warmup_start_date IS NULL",
               (db.today(), account_id))
@@ -318,3 +318,42 @@ async def send_now(cl_id: int) -> tuple[str, str]:
     res = await send_item(cl)
     cl = db.one("SELECT * FROM campaign_leads WHERE id=%s", (cl_id,))
     return res, cl["error"] or ""
+
+
+async def send_reply(lead_id: int, text: str, user_id: int) -> str:
+    """Ответ из инбокса: от аккаунта, за которым закреплён лид, только в уже начатую переписку.
+    Дневной лимит не тратит (это не рассылка), но паузу аккаунта после ограничения Telegram соблюдает.
+    Возвращает пустую строку при успехе или текст ошибки."""
+    lead = db.one("SELECT * FROM leads WHERE id=%s", (lead_id,))
+    text = (text or "").strip()
+    if not lead or not text:
+        return "Пустое сообщение"
+    if lead["opted_out_at"]:
+        return "Лид отписался — писать ему нельзя"
+    if not lead["owner_account_id"]:
+        return "Лид ни за кем не закреплён"
+    if not db.one("SELECT 1 FROM messages WHERE lead_id=%s", (lead_id,)):
+        return "Переписки ещё нет — первое сообщение отправляется через кампанию"
+    acc = account(lead["owner_account_id"])
+    client = tgm.get(acc["id"])
+    if not client.authorized:
+        return f"Аккаунт «{acc['label'] or acc['id']}» не подключён"
+    if tgm.preparing_account(acc["id"]):
+        return "Аккаунт занят поиском — отправьте через минуту"
+    pu = paused_until(acc)
+    if pu:
+        return f"Аккаунт на паузе до {pu.astimezone(db.now_local().tzinfo):%d.%m %H:%M} из-за ограничения Telegram"
+    try:
+        async with client.lock:
+            entity = await client.resolve(lead)
+            sent = await client.client.send_message(entity, text, link_preview=True)
+    except (errors.FloodWaitError, errors.PeerFloodError) as e:
+        _flood(acc["id"], e)
+        return f"Telegram ограничил отправку: {type(e).__name__.replace('Error', '')}"
+    except RECIPIENT_ERRORS as e:
+        return f"Не отправлено: {type(e).__name__.replace('Error', '')}"
+    except (ValueError, errors.RPCError) as e:
+        return f"Не отправлено: {e}"
+    inbox.record(acc["id"], lead_id, "out", text, sent.id, "inbox", sender_user_id=user_id)
+    db.ex("UPDATE leads SET inbox_read_at=now() WHERE id=%s", (lead_id,))
+    return ""
