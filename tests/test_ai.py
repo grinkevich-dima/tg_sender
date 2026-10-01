@@ -175,3 +175,11 @@ def test_ai_pages_and_rights(fake_ai):
     assert db.val("SELECT ai_profile_id FROM campaigns WHERE id=%s", (cid,)) == pid
     admin.post(f"/ai/profiles/{pid}/delete")
     assert db.val("SELECT ai_profile_id FROM campaigns WHERE id=%s", (cid,)) is None
+
+
+def test_no_invented_context_in_opening():
+    """Без данных о знакомстве бот не должен сочинять «вы были на вебинаре» и оставлять заготовки."""
+    assert "вебинар" not in db.get_setting("ai_base_instruction")
+    lead = {"id": 0, "first_name": "Ирина", "last_name": "", "title": None, "extra": {}, "stage_id": None, "note": ""}
+    msgs, _ = ai.build_messages(lead, None, history=[])
+    assert "не выдумывай" in msgs[-1]["content"] and "квадратных скобках" in msgs[0]["content"]
