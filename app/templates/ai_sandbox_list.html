@@ -26,8 +26,8 @@
     <input name="note" placeholder="Заметка менеджера">
   </div>
   </details>
-  <label><input type="checkbox" name="campaign_opening" value="1" checked> Начать с первого сообщения кампании этого профиля</label>
-  <textarea name="opening" rows="2" placeholder="…или своё первое сообщение от нас (необязательно)"></textarea>
+  <label><input type="checkbox" name="campaign_opening" value="1" checked> Первое сообщение — из кампании этого профиля, если она есть</label>
+  <textarea name="opening" rows="2" placeholder="…или своё первое сообщение от нас (необязательно). Если пусто и кампании нет — бот напишет первое сообщение сам"></textarea>
   <button {% if not ai_on %}disabled{% endif %}>Начать диалог</button>
 </form>
 </article>

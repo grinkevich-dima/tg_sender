@@ -31,11 +31,11 @@
       {% endif %}
     {% endif %}
   </div>
-  {% else %}<p class="muted">Диалог пуст — напишите первое сообщение клиента или включите робота.</p>{% endfor %}
+  {% else %}<p class="muted">Диалог пуст — напишите как клиент или включите робота.</p>{% endfor %}
 </div>
 
 <div style="margin-top:.6rem">
-  <textarea id="say" rows="2" placeholder="Напишите как клиент… (Ctrl+Enter — отправить)"></textarea>
+  <textarea id="say" rows="2" placeholder="Ответьте как клиент… (Ctrl+Enter — отправить)" autofocus></textarea>
   <div class="row-actions">
     <button id="say-btn" {% if not ai_on %}disabled{% endif %}>Отправить как клиент</button>
     <button class="outline" id="robot-btn" {% if not ai_on %}disabled{% endif %}>🤖 Ход клиента-робота</button>

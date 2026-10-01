@@ -110,3 +110,36 @@ def test_pages_rights_and_opening_from_campaign(fake):
     assert a.get(f"/ai/sandbox/{sid}").status_code == 200
     m.post(f"/ai/sandbox/{sid}/delete")
     assert sandbox.get(sid) is None and db.val("SELECT COUNT(*) FROM ai_examples") == 1
+
+
+def test_dialog_always_starts_with_bot(fake, monkeypatch):
+    make_user("admin")
+    pid = _profile()
+    seen = []
+    real = ai.chat
+
+    async def spy(messages, **kw):
+        seen.append(messages[-1]["content"])
+        return await real(messages, **kw)
+    monkeypatch.setattr(ai, "chat", spy)
+    c = browser("admin")
+    r = c.post("/ai/sandbox/create", data={"profile_id": pid, "persona": "interested", "name": "Ольга",
+                                           "group": "Вебинар: маркетинг", "campaign_opening": "1"}, follow_redirects=False)
+    sid = int(r.headers["location"].rsplit("/", 1)[1])
+    first, = sandbox.messages(sid)
+    assert first["role"] == "bot" and first["text"] == "Ответ бота 1" and first["debug"]["profile"] == "Вебинар"
+    assert "Переписки ещё нет. Напиши наше первое сообщение" in seen[0] and "Ольга" in seen[0]
+    # дальше отвечаю как клиент
+    c.post(f"/ai/sandbox/{sid}/say", data={"text": "Здравствуйте! А что за вебинар?"})
+    assert [m["role"] for m in sandbox.messages(sid)] == ["bot", "client", "bot"]
+    # начало можно перегенерировать
+    sid2 = int(c.post("/ai/sandbox/create", data={"profile_id": pid}, follow_redirects=False).headers["location"].rsplit("/", 1)[1])
+    first2 = sandbox.messages(sid2)[0]
+    assert c.post(f"/ai/sandbox/{sid2}/retry/{first2['id']}").json() == {"ok": True}
+    assert len(sandbox.messages(sid2)) == 1
+    # ошибка ИИ при старте — диалог создан, понятное сообщение
+    async def broken(messages, **kw):
+        raise ai.AIError("ИИ перегружен")
+    monkeypatch.setattr(ai, "chat", broken)
+    r = c.post("/ai/sandbox/create", data={"profile_id": pid}, follow_redirects=False)
+    assert r.status_code == 303 and "/ai/sandbox/" in r.headers["location"]

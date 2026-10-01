@@ -200,6 +200,11 @@ async def sandbox_create(request: Request):
             opening = render(body, db.lead_vars(sandbox.fake_lead(client) | {"username": "", "phone": ""}))
     sid = sandbox.create(user(request)["id"], pid, client, form.get("persona") or "interested",
                          form.get("persona_text") or "", opening)
+    if not opening:              # ни своего текста, ни текста кампании — первое сообщение пишет бот
+        try:
+            await sandbox.opening_by_bot(sid)
+        except ai.AIError as e:
+            return back(f"/ai/sandbox/{sid}", err=f"Бот не смог написать первое сообщение: {e}. Начните как клиент или попробуйте снова")
     return back(f"/ai/sandbox/{sid}")
 
 

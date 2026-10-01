@@ -157,8 +157,12 @@ def build_messages(lead: dict, profile_id: int | None, history: list[dict] | Non
     for ex in examples:                                          # слой 3: как мы обычно отвечаем
         msgs += [{"role": "user", "content": f"Клиент: {ex['question']}\n\nНапиши наш ответ."},
                  {"role": "assistant", "content": ex["answer"]}]
-    msgs.append({"role": "user", "content": f"О клиенте:\n{_person(lead)}\n\nПереписка:\n{_transcript(history) or '(пока пусто)'}"
-                                            "\n\nНапиши наш следующий ответ."})
+    if history:
+        task = f"Переписка:\n{_transcript(history)}\n\nНапиши наш следующий ответ."
+    else:   # переписки ещё нет — первое сообщение от нас
+        task = ("Переписки ещё нет. Напиши наше первое сообщение этому человеку: обратись по имени, напомни, "
+                "где мы познакомились (если известно), и мягко подведи к цели из инструкции. Не больше 3–4 предложений.")
+    msgs.append({"role": "user", "content": f"О клиенте:\n{_person(lead)}\n\n{task}"})
     return msgs, last_in
 
 

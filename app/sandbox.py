@@ -43,12 +43,18 @@ def fake_lead(client: dict) -> dict:
 
 
 def create(user_id: int, profile_id: int | None, client: dict, persona: str, persona_text: str, opening: str) -> int:
+    """Новый диалог. opening — первое сообщение от нас (текст кампании или свой); пусто — бот напишет сам (opening_by_bot)."""
     sid = db.ex("""INSERT INTO ai_sandboxes(user_id, profile_id, client, persona, persona_text)
                    VALUES (%s, %s, %s, %s, %s) RETURNING id""",
                 (user_id, profile_id, db.jsonb(client), persona if persona in PERSONAS else "interested", persona_text.strip()))
     if opening.strip():          # первое сообщение от нас, как в кампании
         db.ex("INSERT INTO ai_sandbox_messages(sandbox_id, role, text) VALUES (%s, 'bot', %s)", (sid, opening.strip()))
     return sid
+
+
+async def opening_by_bot(sid: int) -> dict:
+    """Первое сообщение пишет бот — по профилю и данным клиента, как начало реальной кампании."""
+    return await bot_reply(sid)
 
 
 async def bot_reply(sid: int) -> dict:
