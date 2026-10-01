@@ -1,0 +1,21 @@
+{# карточки базы знаний; ожидает cards, card_pid (0 — общие), can_cards #}
+{% for c in cards %}
+<details style="margin-bottom:.4rem"><summary><b>{{ c.title }}</b> <small class="muted">{{ c.body[:90] }}{% if c.body|length > 90 %}…{% endif %}</small></summary>
+  {% if can_cards %}
+  <form method="post" action="/ai/cards/{{ card_pid }}/{{ c.id }}">
+    <input name="title" value="{{ c.title }}" required>
+    <textarea name="body" rows="4" required>{{ c.body }}</textarea>
+    <button class="outline" style="width:auto">Сохранить</button>
+  </form>
+  <form method="post" action="/ai/cards/{{ card_pid }}/{{ c.id }}/delete" onsubmit="return confirm('Удалить карточку?')"><button class="outline secondary" style="width:auto">Удалить</button></form>
+  {% else %}<pre class="tpl">{{ c.body }}</pre>{% endif %}
+</details>
+{% else %}<p class="muted">Карточек пока нет.</p>{% endfor %}
+{% if can_cards %}
+<details><summary>➕ Добавить карточку</summary>
+<form method="post" action="/ai/cards/{{ card_pid }}/add">
+  <input name="title" placeholder="Заголовок, напр. «Запись вебинара»" required>
+  <textarea name="body" rows="4" required placeholder="Факты простым текстом: даты, цены, ссылки, условия. ИИ берёт отсюда всё, что не знает сам."></textarea>
+  <button style="width:auto">Добавить</button>
+</form></details>
+{% endif %}

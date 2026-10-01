@@ -46,12 +46,29 @@
     <div class="chat" id="chat">
       {% for m in msgs %}
       {% set src = [] %}{% if m.direction == 'out' %}{% set _ = src.append(SOURCE_RU.get(m.source, '') ~ (' «' ~ m.campaign_name ~ '»' if m.campaign_name else '')) %}{% if m.sender_name %}{% set _ = src.append(m.sender_name) %}{% endif %}{% endif %}
-      <div class="msg {{ m.direction }}" data-id="{{ m.id }}"><span class="t">{{ m.text or '—' }}</span><span class="meta">{{ ([m.created_at|dt] + src|select|list)|join(' · ') }}</span></div>
+      <div class="msg {{ m.direction }}" data-id="{{ m.id }}"><span class="t">{{ m.text or '—' }}</span><span class="meta">{{ ([m.created_at|dt] + src|select|list)|join(' · ') }}</span>
+        {% if m.ai_label %}<span class="meta">ИИ: <b>{{ LABELS[m.ai_label] }}</b>{% if m.ai_note %} — {{ m.ai_note }}{% endif %}
+          {% if (m.ai_label in LABEL_STAGE or m.ai_label == 'stop') and loop.last %}
+          <form method="post" action="/inbox/{{ lead.id }}/apply-label/{{ m.id }}{{ '?' ~ qs if qs else '' }}" style="display:inline"
+                {% if m.ai_label == 'stop' %}onsubmit="return confirm('Отписать лида?')"{% endif %}>
+            <button class="outline" style="width:auto;padding:0 .5rem;margin:0;font-size:1em">{{ 'отписать' if m.ai_label == 'stop' else '→ этап «' ~ LABEL_STAGE[m.ai_label] ~ '»' }}</button></form>
+          {% endif %}</span>{% endif %}</div>
       {% endfor %}
     </div>
 
     {% if not lead.opted_out_at %}
+    {% if ai_on %}
+    <div class="row-actions" style="margin-top:.6rem">
+      <select id="ai-profile" style="width:auto;display:inline-block;margin:0;padding:.3rem .6rem;font-size:.85em">
+        <option value="0">ИИ: общая инструкция</option>
+        {% for p in ai_profiles %}<option value="{{ p.id }}" {% if p.id == ai_profile %}selected{% endif %}>ИИ: {{ p.name }}</option>{% endfor %}
+      </select>
+      <button type="button" class="outline" id="ai-draft">✨ Предложить ответ</button>
+      <small class="muted" id="ai-msg"></small>
+    </div>
+    {% endif %}
     <form method="post" action="/inbox/{{ lead.id }}/send{{ '?' ~ qs if qs else '' }}" style="margin-top:.6rem">
+      <input type="hidden" name="draft_id" id="draft-id" value="0">
       <textarea name="text" rows="3" required placeholder="Ответ уйдёт от аккаунта «{{ card.account.label or card.account.first_name if card.account else '—' }}»… (Ctrl+Enter — отправить)" id="reply"></textarea>
       <button style="width:auto">Отправить</button>
     </form>
@@ -96,6 +113,19 @@
   const chat = document.getElementById('chat');
   if (chat) chat.scrollTop = chat.scrollHeight;
   const reply = document.getElementById('reply');
+  const draftBtn = document.getElementById('ai-draft');
+  if (draftBtn) draftBtn.addEventListener('click', async () => {
+    const msg = document.getElementById('ai-msg');
+    draftBtn.disabled = true; msg.textContent = 'ИИ пишет черновик…';
+    try {
+      const body = new FormData(); body.append('profile_id', document.getElementById('ai-profile').value);
+      const j = await (await fetch('/inbox/{{ lead.id if lead else 0 }}/draft', {method: 'POST', body})).json();
+      if (j.error) { msg.textContent = j.error; }
+      else { reply.value = j.text; document.getElementById('draft-id').value = j.id; reply.focus();
+             msg.textContent = 'Черновик готов — проверьте и поправьте перед отправкой'; }
+    } catch (e) { msg.textContent = 'Ошибка связи'; }
+    draftBtn.disabled = false;
+  });
   if (reply) reply.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) reply.form.requestSubmit(); });
   {% if lead %}
   // новые сообщения диалога — без перезагрузки

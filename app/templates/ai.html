@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<h3>ИИ-помощник</h3>
+{% if status %}<div class="flash err">ИИ: {{ status }}</div>
+{% else %}<p class="muted">Модель <code>{{ model }}</code> подключена ({{ base_url }}). ИИ только предлагает черновики и разбирает ответы — отправляет всегда человек.</p>{% endif %}
+{% if drafts.total %}<p class="muted">Черновиков: {{ drafts.total }}, отправлено: {{ drafts.sent }}, из них почти без правок: {{ drafts.as_is }}.</p>{% endif %}
+
+<article>
+<header><strong>Профили кампаний</strong> <small class="muted">· инструкция, база знаний и примеры для конкретной кампании</small></header>
+<table>
+<thead><tr><th>Профиль</th><th>Карточек</th><th>Примеров</th><th>Кампании</th><th>Автор</th></tr></thead>
+{% for p in profiles %}
+<tr><td><a href="/ai/profiles/{{ p.id }}"><b>{{ p.name }}</b></a></td><td>{{ p.cards }}</td><td>{{ p.examples }}</td>
+<td><small>{{ p.campaigns or '—' }}</small></td><td><small>{{ p.author or '' }}</small></td></tr>
+{% else %}<tr><td colspan="5" class="muted">Пока нет профилей</td></tr>{% endfor %}
+</table>
+<form method="post" action="/ai/profiles/create" class="grid">
+  <input name="name" placeholder="Название, напр. «Вебинар: маркетинг»" required>
+  <button>Создать профиль</button>
+</form>
+<small class="muted">Профиль подключается к кампании на её странице. В инбоксе черновик строится по профилю кампании, из которой человеку писали последней.</small>
+</article>
+
+<form method="post" action="/ai/base">
+<article>
+<header><strong>Общая инструкция команды</strong> <small class="muted">· действует во всех профилях{% if not is_admin %}; меняет админ{% endif %}</small></header>
+<textarea name="instruction" rows="6" {% if not is_admin %}readonly{% endif %}>{{ base }}</textarea>
+{% if is_admin %}<button style="width:auto">Сохранить</button>{% endif %}
+</article>
+</form>
+
+<article>
+<header><strong>Общая база знаний</strong> <small class="muted">· контакты, оплата, правила — то, что верно для всех кампаний</small></header>
+{% set card_pid = 0 %}{% set can_cards = is_admin %}
+{% include "ai_cards.html" %}
+</article>
+{% endblock %}

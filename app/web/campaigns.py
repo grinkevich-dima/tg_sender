@@ -120,6 +120,7 @@ async def campaign_view(request: Request, cid: int, show: str = ""):
         step_stats.setdefault(r["step"], {"sent": 0}).update(replied=r["replied"], waiting=r["waiting"])
     return page(request, "campaign.html", c=c, f=f, facets=cmp.facets(cid), matched=matched, enq=enq, stats=stats,
                 chain=chain, step_stats=step_stats, CONDITIONS=cmp.CONDITIONS, max_followups=cmp.MAX_FOLLOWUPS,
+                ai_profiles=db.q("SELECT id, name FROM ai_profiles ORDER BY name"),
                 rows=rows, show=show, total=sum(stats.values()), step=cmp.step_body(cid),
                 eta_days=eta_days(stats.get("queued", 0), per_day), accs=per_acc,
                 my_accounts=auth.user_accounts(u, only_active=True),
@@ -166,6 +167,16 @@ async def campaign_set_accounts(request: Request, cid: int):
         return back(f"/campaigns/{cid}", err="Нужен хотя бы один аккаунт")
     cmp.set_accounts(cid, accs + keep)
     return back(f"/campaigns/{cid}", msg="Аккаунты кампании обновлены. Уже закреплённые лиды остаются за своими аккаунтами")
+
+
+@router.post("/{cid}/ai-profile")
+async def campaign_ai_profile(request: Request, cid: int):
+    if not _get(request, cid):
+        return back("/campaigns", err="Кампания не найдена")
+    v = (await request.form()).get("ai_profile_id") or ""
+    pid = int(v) if v.isdigit() and db.one("SELECT 1 FROM ai_profiles WHERE id=%s", (int(v),)) else None
+    db.ex("UPDATE campaigns SET ai_profile_id=%s WHERE id=%s", (pid, cid))
+    return back(f"/campaigns/{cid}", msg="ИИ-профиль кампании сохранён" if pid else "ИИ-профиль снят: будет общая инструкция")
 
 
 # ---------- цепочка: дожимы ----------

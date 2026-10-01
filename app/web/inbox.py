@@ -1,7 +1,7 @@
 """Инбокс: диалоги с лидами, ответ из панели, этап воронки, заметка."""
 from fastapi import APIRouter, Form, Request
 
-from .. import auth, db, inbox, leads, worker
+from .. import ai, auth, db, inbox, leads, worker
 from .common import back, page, user
 
 router = APIRouter(prefix="/inbox")
@@ -105,7 +105,10 @@ async def dialog_page(request: Request, lead_id: int):
         "campaigns": db.q("""SELECT c.id, c.name, cl.state FROM campaign_leads cl JOIN campaigns c ON c.id=cl.campaign_id
                              WHERE cl.lead_id=%s ORDER BY c.id DESC""", (lead_id,)),
     }
+    profiles = db.q("SELECT id, name FROM ai_profiles ORDER BY name")
     return page(request, "inbox.html", lead=db.one("SELECT * FROM leads WHERE id=%s", (lead_id,)), msgs=msgs, card=card,
+                ai_on=ai.configured(), ai_profiles=profiles, ai_profile=ai.lead_profile(lead_id), LABELS=ai.LABELS,
+                LABEL_STAGE=ai.LABEL_STAGE,
                 SOURCE_RU=SOURCE_RU, last_id=max((m["id"] for m in msgs), default=0), **_ctx(request))
 
 
@@ -127,8 +130,36 @@ def _back_to(lead_id: int, request: Request) -> str:
     return f"/inbox/{lead_id}" + (f"?{request.url.query}" if request.url.query else "")
 
 
+@router.post("/{lead_id}/draft")
+async def dialog_draft(request: Request, lead_id: int, profile_id: int = Form(0)):
+    """Черновик ответа от ИИ (JSON для кнопки «Предложить ответ»)."""
+    if not _lead(request, lead_id):
+        return {"error": "Диалог не найден"}
+    try:
+        d = await ai.draft(lead_id, user(request)["id"], profile_id or None)
+    except ai.AIError as e:
+        return {"error": str(e)}
+    return d
+
+
+@router.post("/{lead_id}/apply-label/{message_id}")
+async def dialog_apply_label(request: Request, lead_id: int, message_id: int):
+    """Принять подсказку ИИ по входящему: поставить этап или отписать."""
+    if not _lead(request, lead_id):
+        return back("/inbox", err="Диалог не найден")
+    label = db.val("SELECT ai_label FROM messages WHERE id=%s AND lead_id=%s", (message_id, lead_id))
+    if label == "stop":
+        leads.opt_out(lead_id, f"по разбору ИИ, подтвердил {user(request)['login']}")
+        return back(_back_to(lead_id, request), msg="Лид отписан")
+    stage = ai.LABEL_STAGE.get(label)
+    if stage:
+        inbox.set_stage(lead_id, db.val("SELECT id FROM funnel_stages WHERE name=%s", (stage,)))
+        return back(_back_to(lead_id, request), msg=f"Этап «{stage}»")
+    return back(_back_to(lead_id, request))
+
+
 @router.post("/{lead_id}/send")
-async def dialog_send(request: Request, lead_id: int, text: str = Form("")):
+async def dialog_send(request: Request, lead_id: int, text: str = Form(""), draft_id: int = Form(0)):
     if not _lead(request, lead_id):
         return back("/inbox", err="Диалог не найден")
     lead = db.one("SELECT * FROM leads WHERE id=%s", (lead_id,))
@@ -136,7 +167,11 @@ async def dialog_send(request: Request, lead_id: int, text: str = Form("")):
     if not auth.can_use_account(user(request), acc):
         return back(_back_to(lead_id, request), err="Отвечать может менеджер аккаунта, за которым закреплён лид")
     err = await worker.send_reply(lead_id, text, user(request)["id"])
-    return back(_back_to(lead_id, request), err=err) if err else back(_back_to(lead_id, request))
+    if err:
+        return back(_back_to(lead_id, request), err=err)
+    if draft_id and ai.learn_from_send(draft_id, lead_id, text.strip()):
+        return back(_back_to(lead_id, request), msg="Отправлено. Черновик ушёл почти без правок — сохранён как пример для ИИ")
+    return back(_back_to(lead_id, request))
 
 
 @router.post("/{lead_id}/stage")

@@ -27,6 +27,14 @@
   <br><small class="muted">Лиды, уже закреплённые за аккаунтом, остаются за ним — новые будут распределяться между выбранными.</small>
 </form></details>
 
+<form method="post" action="/campaigns/{{ c.id }}/ai-profile" class="row-actions" style="margin-bottom:1rem">
+  <small class="muted">ИИ-профиль для ответов в инбоксе:</small>
+  <select name="ai_profile_id" onchange="this.form.submit()" style="width:auto;display:inline-block;margin:0;padding:.3rem .6rem;font-size:.85em">
+    <option value="">— общая инструкция —</option>
+    {% for p in ai_profiles %}<option value="{{ p.id }}" {% if p.id == c.ai_profile_id %}selected{% endif %}>{{ p.name }}</option>{% endfor %}
+  </select> <a href="/ai" class="muted" style="font-size:.85em">настроить</a>
+</form>
+
 <article>
 <header><strong>Цепочка</strong> <small class="muted">· дожимы уходят тем, кто не ответил; цепочка останавливается при ответе, отписке или этапе, поставленном вручную</small></header>
 <table>

@@ -23,6 +23,7 @@
 | `app/auth.py` | пользователи и пароли (scrypt), роли, cookie-сессия, защита от CSRF, перенос старой сессии |
 | `app/leads.py` | поиск дубликатов, импорт CSV и из Telegram (с добавлением в сегмент), стоп-слова, отписка |
 | `app/segments.py` | сегменты: создание, наполнение по тегу, счётчики |
+| `app/ai.py` | ИИ: вызов OpenAI-совместимого API, сборка запроса из 4 слоёв, черновик, обучение на отправленном, разбор входящих |
 | `app/inbox.py` | инбокс и воронка: запись сообщений без дублей, автоэтапы, счётчик непрочитанных, сводка по этапам |
 | `app/chat_search.py` | поиск групп: запросы из слов и мест, группы обсуждения каналов, проверка ссылок, оценка 0–100 |
 | `app/campaigns.py` | импорт xlsx, кампании по шаблону, фильтры, очередь, распределение лидов по аккаунтам |
@@ -49,6 +50,10 @@
 | `campaign_steps` | шаги цепочки: шаг 1 (текст шаблона) и дожимы — текст, `delay_days`, `condition` (`no_reply` / `read_no_reply` / `unread`) |
 | `campaign_leads` | лид в кампании: аккаунт, состояние, последний шаг `step`, `next_step_at` (когда дожим), `chain_note`, свой текст из xlsx, тема форума, поля файла для фильтров, ошибка, время отправки/прочтения/ответа |
 | `messages` | вся переписка: `source` — кампания / из панели (`inbox`) / вручную в Telegram / входящее, `sender_user_id`; одно сообщение Telegram — одна строка |
+| `ai_profiles` | ИИ-профили кампаний: инструкция |
+| `ai_cards` | база знаний: карточки общие (`profile_id` NULL) и профилей |
+| `ai_examples` | примеры ответов профиля: вручную или из инбокса |
+| `ai_drafts` | черновики ИИ: что предложено, что отправлено, похожесть |
 | `funnel_stages` | этапы воронки: порядок, цель, отказ, `auto` (`contacted` / `replied` — ставятся сами) |
 | `tg_dialogs` | снимок диалогов аккаунта: поиск чатов по названию, «есть ли переписка», группы для сегментов (`is_admin`, `members`, `username` для ссылки t.me, `last_message_id` для ссылки в приложение) |
 | `settings` | правила команды: стоп-слова, `recontact_days` |
@@ -82,7 +87,7 @@
 ## События Telegram
 
 - `NewMessage(outgoing, private)` → своё сообщение лиду, написанное прямо в Telegram, сохраняется в `messages` (только лидам этого аккаунта).
-- `NewMessage(incoming, private)` → запись в `messages`, этап «ответил», «ответил» у строк кампаний этого аккаунта; стоп-слово → отписка лида для всей команды; затем хуки `incoming_hooks`.
+- `NewMessage(incoming, private)` → запись в `messages`, разбор ИИ в фоне (`messages.ai_label`), этап «ответил», «ответил» у строк кампаний этого аккаунта; стоп-слово → отписка лида для всей команды; затем хуки `incoming_hooks`.
 - `MessageRead(outbox)` → «прочитано» у строк этого аккаунта до `max_id`.
 - Досинхронизация прочтений (`refresh_reads`) — раз в 30 мин и по кнопке.
 
@@ -98,6 +103,7 @@
 | Команда | `/users`, `/users/create`, `/users/{id}/toggle`, `/users/{id}/password` |
 | Аккаунты | `/accounts`, `/accounts/create`, `/accounts/{id}` (настройки), `/accounts/{id}/login`, `/phone`, `/code`, `/password`, `/qr`, `/qr/status`, `/qr/done`, `/logout`, `/pause`, `/resume`, `/import`, `/delete` |
 | Лиды | `/leads`, `/leads/import-csv`, `/leads/{id}/optout`, `/leads/delete` |
+| ИИ | `/ai`, `/ai/base`, `/ai/profiles/create`, `/ai/profiles/{id}`, `/try`, `/delete`, `/examples/add`, `/examples/{id}/{toggle\|delete}`, `/ai/cards/{profile_id или 0}/add`, `/ai/cards/{p}/{id}`, `/delete`; кампания — `/campaigns/{id}/ai-profile`; инбокс — `/inbox/{lead}/draft`, `/inbox/{lead}/apply-label/{message}` |
 | Инбокс | `/inbox`, `/inbox/unread`, `/inbox/{lead_id}`, `/messages`, `/send`, `/stage`, `/note`, `/optout`; этапы — `/settings/stages/add`, `/settings/stages/{id}`, `/settings/stages/{id}/delete` |
 | Поиск групп | `/chat-search`, `/chat-search/create`, `/chat-search/links`, `/chat-search/state`, `/chat-search/{id}/rerun`, `/chat-search/{id}/delete`, `/chat-search/found/{id}/{status}` |
 | Сегменты | `/segments`, `/segments/create`, `/segments/{id}`, `/import-csv`, `/import-tg`, `/add-tag`, `/refresh-groups`, `/import-group`, `/remove/{lead_id}`, `/edit`, `/delete` |

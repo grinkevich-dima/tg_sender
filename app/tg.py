@@ -7,13 +7,14 @@ from telethon import TelegramClient, errors, events, utils
 from telethon.tl.functions.contacts import GetContactsRequest
 from telethon.tl.types import User
 
-from . import db, inbox, leads
+from . import ai, db, inbox, leads
 from .config import API_HASH, API_ID, SESSIONS_DIR
 
 # Точка расширения: сюда подключится ИИ-разбор ответов.
 # Каждый хук получает (account_client, event, lead_row | None).
 IncomingHook = Callable[["AccountClient", events.NewMessage.Event, object], Awaitable[None]]
 incoming_hooks: list[IncomingHook] = []
+_background: set[asyncio.Task] = set()     # держим ссылки на фоновые задачи, чтобы их не собрал сборщик мусора
 
 CODE_WHERE = {"App": "в приложение Telegram (чат «Telegram»)", "Sms": "по SMS", "Call": "звонком",
               "FlashCall": "flash-звонком", "MissedCall": "пропущенным звонком (последние цифры номера)",
@@ -445,7 +446,12 @@ class AccountClient:
     async def handle_incoming(self, uid: int, text: str | None, tg_message_id: int | None, event=None):
         lead = db.one("SELECT * FROM leads WHERE tg_id=%s", (uid,))
         if lead:
-            inbox.record(self.id, lead["id"], "in", text, tg_message_id, "incoming")
+            if inbox.record(self.id, lead["id"], "in", text, tg_message_id, "incoming") and ai.configured() and text:
+                mid = db.val("""SELECT id FROM messages WHERE account_id=%s AND lead_id=%s AND direction='in'
+                                AND tg_message_id=%s""", (self.id, lead["id"], tg_message_id))
+                t = asyncio.create_task(ai.classify_message(mid))   # разбор ответа ИИ — в фоне, приём не ждёт
+                _background.add(t)
+                t.add_done_callback(_background.discard)
             inbox.auto_stage(lead["id"], "replied")
             db.ex("""UPDATE campaign_leads SET state='replied', replied_at=now(), next_step_at=NULL,
                      chain_note=CASE WHEN next_step_at IS NOT NULL THEN 'дожимы остановлены: ответил' ELSE chain_note END
