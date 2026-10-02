@@ -14,8 +14,8 @@
 {% if can_cards %}
 <details><summary>➕ Добавить карточку</summary>
 <form method="post" action="/ai/cards/{{ card_pid }}/add">
-  <input name="title" placeholder="Заголовок, напр. «Запись вебинара»" required>
-  <textarea name="body" rows="4" required placeholder="Факты простым текстом: даты, цены, ссылки, условия. ИИ берёт отсюда всё, что не знает сам."></textarea>
+  <input name="title" placeholder="Заголовок словами клиента, напр. «Сколько стоит сайт»" required>
+  <textarea name="body" rows="4" required placeholder="Факты: цифры, сроки, условия, ссылки. Одна карточка — одна тема. Можно добавить «если спросят X — ответ Y»."></textarea>
   <button style="width:auto">Добавить</button>
 </form></details>
 {% endif %}

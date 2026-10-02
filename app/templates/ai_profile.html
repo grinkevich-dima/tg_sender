@@ -7,9 +7,16 @@
 
 <form method="post" action="/ai/profiles/{{ p.id }}">
 <article>
-<header><strong>1. Инструкция профиля</strong> <small class="muted">· дополняет общую инструкцию команды</small></header>
+<header><strong>1. Инструкция профиля</strong> <small class="muted">· дополняет общую инструкцию команды ·
+  <a href="https://github.com/grinkevich-dima/tg_sender/blob/main/docs/ai-profiles.md" target="_blank" rel="noopener">как заполнять</a></small></header>
 <input name="name" value="{{ p.name }}" required {% if not can_edit %}readonly{% endif %}>
-<textarea name="instruction" rows="6" {% if not can_edit %}readonly{% endif %} placeholder="Кто пишет: «Дмитрий, ведущий вебинара по маркетингу». О чём кампания и цель: «пригласить на платный семинар 15 ноября». Тон и особенности: «на ты, если человек сам перешёл на ты»…">{{ p.instruction }}</textarea>
+<textarea name="instruction" rows="6" {% if not can_edit %}readonly{% endif %} placeholder="Кто пишет: Дмитрий, руководитель веб-агентства. Пиши в мужском роде.
+Кому пишем: собственники, которые были на нашем вебинаре о сайтах.
+Цель: договориться о бесплатном созвоне на 20–30 минут.
+Как вести: сначала узнай, есть ли задача; по одному вопросу уточни бизнес, текущий сайт, сроки; после 2–3 ответов предложи созвон.
+Тон: на «вы», 2–4 предложения, лёгкий юмор — только если клиент шутит.
+Если просят цену — вилка из базы знаний + уточняющий вопрос. «Не сейчас» — спроси, когда вернуться. Отказ — поблагодари.
+Нельзя: обещать сроки и скидки сверх базы знаний, задавать больше одного вопроса за раз.">{{ p.instruction }}</textarea>
 {% if can_edit %}<button style="width:auto">Сохранить</button>{% endif %}
 </article>
 </form>
