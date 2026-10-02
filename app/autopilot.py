@@ -32,6 +32,9 @@ AUTOPILOT_RULE = (
 # ИИ пообещал уточнить — значит, ответ за человеком: ставим «нужен человек», чтобы клиент не повис
 PROMISE_RE = re.compile(r"\b(уточн\w*|узна\w* у|спрош\w* у|верн\w* с ответ\w*|сверюсь|передам (?:вопрос|коллег))", re.I)
 
+# заготовка вместо факта («[ссылка]», «[цена]») — у ИИ нет нужного факта в базе знаний; такое не отправляем
+PLACEHOLDER_RE = re.compile(r"\[[^\[\]\n]{2,40}\]")
+
 _inflight: set[asyncio.Task] = set()
 
 
@@ -200,6 +203,10 @@ async def send_job(job: dict) -> str:
         return "handoff"
     if not text or text.upper().startswith("HANDOFF"):
         handoff(lead_id, text.split(":", 1)[1].strip() if ":" in text else "ИИ не смог ответить", acc_id)
+        return "handoff"
+    hole = PLACEHOLDER_RE.search(text)
+    if hole:
+        handoff(lead_id, f"в базе знаний нет нужного факта: ИИ написал {hole.group(0)}", acc_id)
         return "handoff"
     try:
         async with client.lock:

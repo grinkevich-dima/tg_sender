@@ -216,3 +216,14 @@ def test_promise_to_check_flags_human(fake):
     assert job(lid)["status"] == "sent"                                        # ответ ушёл…
     assert "пообещал уточнить" in db.val("SELECT ai_handoff FROM leads WHERE id=%s", (lid,))   # …и человек в курсе
     assert autopilot.PROMISE_RE.search("Сейчас узнаю у коллег") and not autopilot.PROMISE_RE.search("Лендинг — 2–3 недели")
+
+
+def test_placeholder_is_not_sent(fake):
+    u, a, lid = setup()
+    incoming(a, "Покажите ваши работы", 10)
+    fake["answer"] = "Ирина, вот наше портфолио: [ссылка]. Какая тематика интересна?"
+    make_due(lid)
+    send_due()
+    assert job(lid)["status"] == "handoff" and "[ссылка]" in db.val("SELECT ai_handoff FROM leads WHERE id=%s", (lid,))
+    assert db.val("SELECT COUNT(*) FROM messages WHERE source='ai'") == 0
+    assert not autopilot.PLACEHOLDER_RE.search("Лендинг — от 1 500 BYN (точнее после созвона)")

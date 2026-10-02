@@ -23,6 +23,9 @@
         <b>Профиль:</b> {{ m.debug.profile or 'нет' }} · <b>примеров:</b> {{ m.debug.examples }} ·
         <b>карточки:</b> {{ m.debug.cards|join(', ') or 'нет' }}<br><b>Клиент:</b> {{ m.debug.person }}
         <details><summary>Полная инструкция</summary><pre class="tpl">{{ m.debug.system }}</pre></details>
+        {% if m.debug.turns %}<details><summary>Переписка, как её видел ИИ ({{ m.debug.turns|length }} реплик)</summary>
+          {% for t in m.debug.turns %}<div style="margin:.2rem 0"><b>{{ 'служебно' if t.text.startswith('[Служебно') else ('клиент' if t.role == 'user' else 'мы') }}</b>
+            <small class="muted">({{ t.role }})</small>: {{ t.text }}</div>{% endfor %}</details>{% endif %}
         {% if m.debug.original %}<details><summary>Ответ бота до исправления</summary><pre class="tpl">{{ m.debug.original }}</pre></details>{% endif %}
       </div>
       <form method="post" action="/ai/sandbox/{{ s.id }}/save/{{ m.id }}" id="fix-{{ m.id }}" hidden style="margin-top:.4rem">

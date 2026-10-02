@@ -128,7 +128,7 @@ def test_dialog_always_starts_with_bot(fake, monkeypatch):
     sid = int(r.headers["location"].rsplit("/", 1)[1])
     first, = sandbox.messages(sid)
     assert first["role"] == "bot" and first["text"] == "Ответ бота 1" and first["debug"]["profile"] == "Вебинар"
-    assert "Переписки ещё нет. Напиши наше первое сообщение" in seen[0] and "Ольга" in seen[0]
+    assert "[Служебно, не от клиента]: переписки ещё нет. Напиши наше первое сообщение" in seen[0]
     # дальше отвечаю как клиент
     c.post(f"/ai/sandbox/{sid}/say", data={"text": "Здравствуйте! А что за вебинар?"})
     assert [m["role"] for m in sandbox.messages(sid)] == ["bot", "client", "bot"]

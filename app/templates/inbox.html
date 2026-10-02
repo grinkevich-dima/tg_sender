@@ -130,7 +130,9 @@
       const j = await (await fetch('/inbox/{{ lead.id if lead else 0 }}/draft', {method: 'POST', body})).json();
       if (j.error) { msg.textContent = j.error; }
       else { reply.value = j.text; document.getElementById('draft-id').value = j.id; reply.focus();
-             msg.textContent = 'Черновик готов — проверьте и поправьте перед отправкой'; }
+             const hole = j.text.match(/\[[^\[\]\n]{2,40}\]/);
+             msg.textContent = hole ? `В черновике заготовка ${hole[0]} — впишите факт (и добавьте его карточкой в профиль)`
+                                    : 'Черновик готов — проверьте и поправьте перед отправкой'; }
     } catch (e) { msg.textContent = 'Ошибка связи'; }
     draftBtn.disabled = false;
   });

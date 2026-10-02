@@ -47,10 +47,11 @@ def test_build_messages_has_all_four_layers():
     assert "Пишет Дмитрий" in system                                            # 1: профиля
     assert "Запись доступна 7 дней" in system and "pay.example" in system       # 2: карточки профиля и общие
     assert "не должна попасть" not in system
-    assert msgs[1]["content"].startswith("Клиент: Где запись?") and msgs[2]["content"] == "Вот ссылка на запись"  # 3
-    last = msgs[-1]["content"]                                                   # 4
-    assert "Ира" in last and "Хочет на семинар" in last and "Вебинар, вступил 20.09.2026" in last
-    assert "Мы: Привет, Ира!" in last and "Клиент: А запись будет?" in last
+    assert "Клиент: Где запись?\nМы: Вот ссылка на запись" in system                 # 3: примеры — в инструкции
+    assert "Ира" in system and "Хочет на семинар" in system and "Вебинар, вступил 20.09.2026" in system   # 4
+    # переписка — репликами с ролями: наши — assistant, клиента — user
+    assert msgs[1:] == [{"role": "assistant", "content": "Привет, Ира!"}, {"role": "user", "content": "А запись будет?"}]
+    assert "реплики пользователя (user) — это сообщения клиента" in system
     assert question == "А запись будет?"
 
 
@@ -183,3 +184,31 @@ def test_no_invented_context_in_opening():
     lead = {"id": 0, "first_name": "Ирина", "last_name": "", "title": None, "extra": {}, "stage_id": None, "note": ""}
     msgs, _ = ai.build_messages(lead, None, history=[])
     assert "не выдумывай" in msgs[-1]["content"] and "квадратных скобках" in msgs[0]["content"]
+
+
+def test_dialog_turns_roles_and_merging():
+    hist = [{"direction": "out", "text": "Здравствуйте!"}, {"direction": "in", "text": "Добрый день."},
+            {"direction": "in", "text": "Вы кто?"}, {"direction": "out", "text": "Я Дмитрий."}, {"direction": "in", "text": "  "}]
+    assert ai.dialog_turns(hist) == [{"role": "assistant", "content": "Здравствуйте!"},
+                                    {"role": "user", "content": "Добрый день.\nВы кто?"},      # подряд — одной репликой
+                                    {"role": "assistant", "content": "Я Дмитрий."}]
+    # для клиента-робота — зеркально
+    assert ai.dialog_turns(hist, ours="user", theirs="assistant")[0]["role"] == "user"
+    # последним писали мы — служебное задание, помеченное как не от клиента
+    lead = {"id": 0, "first_name": "Ирина", "last_name": "", "title": None, "extra": {}, "stage_id": None, "note": ""}
+    msgs, last_in = ai.build_messages(lead, None, history=hist[:4])
+    assert msgs[-1]["role"] == "user" and msgs[-1]["content"].startswith("[Служебно, не от клиента]: клиент ещё не ответил")
+    assert last_in == "Вы кто?"
+    msgs, _ = ai.build_messages(lead, None, history=hist[:3])
+    assert msgs[-1] == {"role": "user", "content": "Добрый день.\nВы кто?"}       # ответ на реплику клиента — без заданий
+
+
+def test_classify_marks_sides(monkeypatch):
+    seen = []
+
+    async def chat(messages, **kw):
+        seen.append(messages[-1]["content"])
+        return '{"label": "question", "note": "x"}'
+    monkeypatch.setattr(ai, "chat", chat)
+    run(ai.classify([{"direction": "out", "text": "Есть задача по сайту?"}, {"direction": "in", "text": "А вы кто?"}]))
+    assert "МЫ: Есть задача по сайту?\nКЛИЕНТ: А вы кто?" in seen[0] and "последнего сообщения КЛИЕНТА: «А вы кто?»" in seen[0]

@@ -114,10 +114,6 @@ def _history(lead_id: int) -> list[dict]:
     return list(reversed(rows))
 
 
-def _transcript(rows: list[dict]) -> str:
-    return "\n".join(f"{'Клиент' if r['direction'] == 'in' else 'Мы'}: {r['text']}" for r in rows)
-
-
 def _person(lead: dict) -> str:
     extra = lead.get("extra") or {}
     stage = db.val("SELECT name FROM funnel_stages WHERE id=%s", (lead["stage_id"],)) if lead.get("stage_id") else None
@@ -131,9 +127,29 @@ def _person(lead: dict) -> str:
     return "\n".join(parts)
 
 
+SERVICE = "[Служебно, не от клиента]"
+
+
+def dialog_turns(history: list[dict], ours: str = "assistant", theirs: str = "user") -> list[dict]:
+    """Переписка → реплики с ролями: клиент — user, мы — assistant (для клиента-робота роли зеркальные).
+    Несколько сообщений подряд от одной стороны склеиваются в одну реплику."""
+    turns: list[dict] = []
+    for r in history:
+        role = theirs if r["direction"] == "in" else ours
+        text = (r.get("text") or "").strip()
+        if not text:
+            continue
+        if turns and turns[-1]["role"] == role:
+            turns[-1]["content"] += "\n" + text
+        else:
+            turns.append({"role": role, "content": text})
+    return turns
+
+
 def build_messages(lead: dict, profile_id: int | None, history: list[dict] | None = None,
                    debug: dict | None = None) -> tuple[list[dict], str]:
     """Сообщения для модели и последний вопрос клиента (для примеров).
+    Переписка передаётся репликами с ролями: клиент — user, мы — assistant; служебные задания помечены.
     history — своя переписка вместо сохранённой (тренажёр); debug — сюда кладём, что попало в запрос."""
     base = db.get_setting("ai_base_instruction")
     profile = db.one("SELECT * FROM ai_profiles WHERE id=%s", (profile_id,)) if profile_id else None
@@ -142,29 +158,38 @@ def build_messages(lead: dict, profile_id: int | None, history: list[dict] | Non
     last_in = next((r["text"] for r in reversed(history) if r["direction"] == "in"), "")
     recent = " ".join(r["text"] for r in history[-4:])
     cards = pick_cards(profile_id, recent)
+    examples = pick_examples(profile_id)
+    name = (lead.get("first_name") or lead.get("title") or "клиент").strip()
     system = [base]
     if profile and profile["instruction"].strip():
         system.append(profile["instruction"].strip())
+    system.append(f"Как устроена переписка ниже: реплики пользователя (user) — это сообщения клиента; клиента зовут {name}, "
+                  f"обращайся к нему только так. Твои реплики (assistant) — это наши сообщения, их писали мы от имени автора "
+                  "из инструкции; имя автора — не имя клиента. Ты пишешь следующее сообщение от нас клиенту. "
+                  f"Сообщения с пометкой «{SERVICE}» — задания для тебя от системы, клиент их не писал и не видит.")
     system.append("Отвечай только готовым текстом сообщения для клиента — без кавычек, пометок, вариантов и заготовок "
                   "в квадратных скобках вроде [тема] или [имя]. Не придумывай ссылки, цены, даты и факты о клиенте: "
                   "используй только базу знаний, переписку и данные о клиенте.")
+    system.append(f"Данные о клиенте:\n{_person(lead)}")
     if cards:
         system.append("База знаний:\n" + "\n\n".join(f"### {c['title']}\n{c['body']}" for c in cards))
+    if examples:                                                  # слой 3: как мы обычно отвечаем
+        system.append("Примеры наших ответов (только для стиля, это не текущая переписка):\n" + "\n\n".join(
+            f"Клиент: {ex['question']}\nМы: {ex['answer']}" for ex in examples))
     msgs = [{"role": "system", "content": "\n\n".join(system)}]
-    examples = pick_examples(profile_id)
+    turns = dialog_turns(history)
+    msgs += turns
+    if not turns:   # переписки ещё нет — первое сообщение от нас
+        msgs.append({"role": "user", "content": f"{SERVICE}: переписки ещё нет. Напиши наше первое сообщение этому человеку: "
+                     "обратись по имени и мягко подведи к цели из инструкции. Где и как мы познакомились, упоминай только "
+                     "если это есть в данных о клиенте (группа, заметка) — не выдумывай. Не больше 3–4 предложений."})
+    elif turns[-1]["role"] == "assistant":   # последним писали мы — клиент ещё не ответил
+        msgs.append({"role": "user", "content": f"{SERVICE}: клиент ещё не ответил на наше последнее сообщение. "
+                     "Напиши следующее сообщение от нас — не повторяй уже сказанное."})
     if debug is not None:
         debug.update(profile=profile["name"] if profile else None, cards=[c["title"] for c in cards],
-                     examples=len(examples), system=msgs[0]["content"], person=_person(lead))
-    for ex in examples:                                          # слой 3: как мы обычно отвечаем
-        msgs += [{"role": "user", "content": f"Клиент: {ex['question']}\n\nНапиши наш ответ."},
-                 {"role": "assistant", "content": ex["answer"]}]
-    if history:
-        task = f"Переписка:\n{_transcript(history)}\n\nНапиши наш следующий ответ."
-    else:   # переписки ещё нет — первое сообщение от нас
-        task = ("Переписки ещё нет. Напиши наше первое сообщение этому человеку: обратись по имени и мягко подведи "
-                "к цели из инструкции. Где и как мы познакомились, упоминай только если это есть в данных о клиенте "
-                "(группа, заметка) — не выдумывай. Не больше 3–4 предложений.")
-    msgs.append({"role": "user", "content": f"О клиенте:\n{_person(lead)}\n\n{task}"})
+                     examples=len(examples), system=msgs[0]["content"], person=_person(lead),
+                     turns=[{"role": m["role"], "text": m["content"]} for m in msgs[1:]])
     return msgs, last_in
 
 
@@ -214,10 +239,19 @@ def parse_label(text: str) -> tuple[str | None, str]:
     return label, str(d.get("note") or "")[:200]
 
 
+def labeled_transcript(rows: list[dict]) -> str:
+    """Переписка с явной разметкой сторон — для разбора и подобных задач."""
+    return "\n".join(f"{'КЛИЕНТ' if r['direction'] == 'in' else 'МЫ'}: {r['text']}" for r in rows if (r.get("text") or "").strip())
+
+
 async def classify(rows: list[dict]) -> tuple[str | None, str]:
     """Разбор последнего сообщения клиента в переписке rows ({direction, text}, по времени)."""
+    rows = rows[-8:]
+    last = next((r["text"] for r in reversed(rows) if r["direction"] == "in"), "")
     answer = await chat([{"role": "system", "content": CLASSIFY_PROMPT},
-                         {"role": "user", "content": _transcript(rows[-8:])}], temperature=0, max_tokens=80)
+                         {"role": "user", "content": f"Переписка (КЛИЕНТ — сообщения клиента, МЫ — наши):\n"
+                                                     f"{labeled_transcript(rows)}\n\nОпредели смысл последнего сообщения "
+                                                     f"КЛИЕНТА: «{last}»"}], temperature=0, max_tokens=80)
     return parse_label(answer)
 
 

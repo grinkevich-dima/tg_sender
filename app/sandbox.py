@@ -89,11 +89,13 @@ async def robot_turn(sid: int) -> str | None:
     persona = s["persona_text"] if s["persona"] == "custom" and s["persona_text"] else PERSONAS.get(s["persona"], PERSONAS["interested"])[1]
     client = s["client"] or {}
     who = f"Тебя зовут {client.get('name') or 'клиент'}." + (f" Ты был в группе «{client['group']}»." if client.get("group") else "")
-    transcript = "\n".join(f"{'Вы' if m['role'] == 'client' else 'Менеджер'}: {m['text']}" for m in messages(sid))
-    text = await ai.chat([{"role": "system", "content": ROBOT_PROMPT.format(persona=persona) + " " + who},
-                          {"role": "user", "content": f"Переписка:\n{transcript or '(пока пусто — начни разговор сам)'}\n\n"
-                                                      "Напиши следующее сообщение клиента."}],
-                         temperature=0.8, max_tokens=120)
+    # для робота роли зеркальные: его реплики (клиента) — assistant, наши (менеджера) — user
+    turns = ai.dialog_turns(_history(sid), ours="user", theirs="assistant")
+    if not turns or turns[-1]["role"] == "assistant":
+        turns.append({"role": "user", "content": f"{ai.SERVICE}: напиши следующее сообщение клиента."})
+    system = (ROBOT_PROMPT.format(persona=persona) + " " + who + " Реплики пользователя (user) — сообщения менеджера; "
+              "твои реплики (assistant) — твои сообщения как клиента.")
+    text = await ai.chat([{"role": "system", "content": system}] + turns, temperature=0.8, max_tokens=120)
     text = text.strip().strip('"«»')
     if text.lower().startswith(("вы:", "клиент:")):
         text = text.split(":", 1)[1].strip()
