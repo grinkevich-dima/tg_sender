@@ -1,6 +1,7 @@
 # секреты и данные аккаунта — НЕ коммитить
 .env
 data/
+backups/
 *.session
 *.session-journal
 *.db

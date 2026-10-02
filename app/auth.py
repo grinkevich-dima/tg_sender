@@ -47,6 +47,31 @@ def authenticate(login: str, password: str) -> dict | None:
     return u if u and check_password(password, u["password_hash"]) else None
 
 
+# ---------- защита от перебора паролей ----------
+MAX_FAILURES = 8
+LOCK_MINUTES = 15
+
+
+def login_blocked(login: str) -> bool:
+    """Слишком много неудачных попыток по этому логину за последние 15 минут.
+    По адресу не считаем: в Docker все запросы приходят с одного внутреннего адреса — заблокировали бы всю команду."""
+    n = db.val("""SELECT COUNT(*) FROM login_failures WHERE login=%s AND at > now() - make_interval(mins => %s)""",
+               (login.strip().lower(), LOCK_MINUTES))
+    return (n or 0) >= MAX_FAILURES
+
+
+def login_failed(login: str, ip: str) -> None:
+    login = login.strip().lower()
+    db.ex("INSERT INTO login_failures(login, ip) VALUES (%s, %s)", (login, ip))
+    db.ex("DELETE FROM login_failures WHERE at < now() - interval '1 day'")
+    if login_blocked(login):
+        db.log(f"Вход заблокирован на {LOCK_MINUTES} мин: много неудачных попыток (логин «{login[:40]}», адрес {ip})", "warn")
+
+
+def login_succeeded(login: str) -> None:
+    db.ex("DELETE FROM login_failures WHERE login=%s", (login.strip().lower(),))
+
+
 def has_users() -> bool:
     return bool(db.val("SELECT EXISTS(SELECT 1 FROM users)"))
 

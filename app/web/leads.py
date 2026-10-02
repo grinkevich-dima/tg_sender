@@ -2,7 +2,7 @@
 from fastapi import APIRouter, File, Form, Request, UploadFile
 
 from .. import auth, db, leads
-from .common import back, local_url, page, user
+from .common import UploadTooLarge, back, local_url, page, read_upload, user
 
 router = APIRouter(prefix="/leads")
 PER_PAGE = 100
@@ -45,7 +45,11 @@ async def leads_page(request: Request, tag: str = "", s: str = "", owner: str = 
 
 @router.post("/import-csv")
 async def import_csv(request: Request, file: UploadFile = File(...), tag: str = Form("")):
-    added, updated, bad = leads.import_csv(await file.read(), tag)
+    try:
+        raw = await read_upload(file)
+    except UploadTooLarge as e:
+        return back("/leads", err=str(e))
+    added, updated, bad = leads.import_csv(raw, tag)
     db.log(f"Импорт CSV {file.filename}: +{added}, обновлено {updated}, пропущено {bad} ({user(request)['login']})")
     return back("/leads", msg=f"Добавлено {added}, обновлено {updated}, пропущено строк {bad}")
 

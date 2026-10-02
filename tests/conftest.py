@@ -21,7 +21,7 @@ from telethon.tl.types import InputPeerUser  # noqa: E402
 from app import auth, db, worker  # noqa: E402
 from app.tg import tgm  # noqa: E402
 
-TABLES = ["ai_reply_jobs", "ai_sandbox_messages", "ai_sandboxes", "ai_drafts", "ai_examples", "ai_cards", "ai_profiles", "found_chat_hits", "found_chats", "chat_searches", "segment_leads", "segments", "messages", "campaign_leads", "campaign_steps", "campaign_accounts", "campaigns", "tg_dialogs",
+TABLES = ["login_failures", "ai_reply_jobs", "ai_sandbox_messages", "ai_sandboxes", "ai_drafts", "ai_examples", "ai_cards", "ai_profiles", "found_chat_hits", "found_chats", "chat_searches", "segment_leads", "segments", "messages", "campaign_leads", "campaign_steps", "campaign_accounts", "campaigns", "tg_dialogs",
           "leads", "templates", "event_log", "tg_accounts", "users", "settings"]
 
 

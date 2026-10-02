@@ -8,7 +8,7 @@ from telethon import errors
 from .. import auth, db, inbox, leads, segments
 from ..tasks import spawn
 from ..tg import tgm
-from .common import back, page, user
+from .common import UploadTooLarge, back, page, read_upload, user
 
 router = APIRouter(prefix="/segments")
 PER_PAGE = 100
@@ -68,7 +68,11 @@ async def segment_import_csv(request: Request, sid: int, file: UploadFile = File
     if not segments.get(sid):
         return back("/segments", err="Сегмент не найден")
     before = segments.size(sid)
-    added, updated, bad = leads.import_csv(await file.read(), tag, segment_id=sid)
+    try:
+        raw = await read_upload(file)
+    except UploadTooLarge as e:
+        return back(f"/segments/{sid}", err=str(e))
+    added, updated, bad = leads.import_csv(raw, tag, segment_id=sid)
     joined = segments.size(sid) - before
     db.log(f"Сегмент #{sid}: CSV {file.filename} — в сегмент добавлено {joined} (новых лидов {added}, пропущено {bad})")
     return back(f"/segments/{sid}", msg=f"В сегмент добавлено {joined}. Новых лидов в базе: {added}, "

@@ -33,6 +33,39 @@ AUTOPILOT_RULE = (
 # ИИ пообещал уточнить — значит, ответ за человеком: ставим «нужен человек», чтобы клиент не повис
 PROMISE_RE = re.compile(r"\b(уточн\w*|узна\w* у|спрош\w* у|верн\w* с ответ\w*|сверюсь|передам (?:вопрос|коллег))", re.I)
 
+# ---------- проверка ответа перед отправкой (защита от манипуляций текстом клиента) ----------
+MAX_REPLY = 900
+URL_RE = re.compile(r"(?:https?://|t\.me/|www\.)[^\s<>«»\"')]+", re.I)
+MONEY_RE = re.compile(r"(\d[\d\s.,]*\d|\d)\s*(%|процент\w*|byn|бел\.?\s*руб\w*|руб\w*|р\.|₽|\$|€|usd|eur|долл\w*|евро)", re.I)
+AI_TALK_RE = re.compile(r"(как (?:ии|искусственный интеллект|языковая модель|нейросеть)|я\s*[—-]?\s*(?:ии|бот|нейросеть|языковая модель)\b"
+                        r"|мои (?:инструкции|правила)|систем\w* (?:промпт|инструкц)|prompt)", re.I)
+
+
+def _digits(s: str) -> str:
+    return re.sub(r"\D", "", s)
+
+
+def check_reply(text: str, profile_id: int | None) -> str | None:
+    """Почему этот автоответ нельзя отправлять без человека (None — можно).
+    Ссылки и суммы — только те, что есть в базе знаний: так клиент не «уговорит» ИИ на скидку или чужую ссылку."""
+    if len(text) > MAX_REPLY:
+        return f"слишком длинный ответ ({len(text)} символов)"
+    if AI_TALK_RE.search(text):
+        return "ответ про ИИ или инструкции"
+    kb = " ".join(f"{c['title']} {c['body']}" for c in db.q(
+        "SELECT title, body FROM ai_cards WHERE profile_id IS NULL OR profile_id=%s", (profile_id,)))
+    kb_low = kb.lower()
+    for url in URL_RE.findall(text):
+        url = url.rstrip(".,;:!?")
+        if url.lower() not in kb_low:
+            return f"ссылка не из базы знаний: {url}"
+    kb_numbers = {_digits(m.group(0)) for m in re.finditer(r"\d[\d\s.,]*\d|\d", kb)}
+    for m in MONEY_RE.finditer(text):
+        if _digits(m.group(1)) not in kb_numbers:
+            return f"сумма или процент не из базы знаний: {m.group(0).strip()}"
+    return None
+
+
 # заготовка вместо факта («[ссылка]», «[цена]») — у ИИ нет нужного факта в базе знаний; такое не отправляем
 PLACEHOLDER_RE = re.compile(r"\[[^\[\]\n]{2,40}\]")
 
@@ -217,6 +250,10 @@ async def _send_job(job: dict) -> str:
     hole = PLACEHOLDER_RE.search(text)
     if hole:
         handoff(lead_id, f"в базе знаний нет нужного факта: ИИ написал {hole.group(0)}", acc_id)
+        return "handoff"
+    problem = check_reply(text, job["profile_id"])
+    if problem:
+        handoff(lead_id, f"ответ ИИ не отправлен — {problem}", acc_id)
         return "handoff"
     try:
         async with client.lock:

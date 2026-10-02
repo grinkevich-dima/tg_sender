@@ -91,6 +91,27 @@ def local_url(url: str | None, default: str) -> str:
     return path + (f"?{u.query}" if u.query else "")
 
 
+MAX_UPLOAD = 10 * 1024 * 1024      # 10 МБ
+
+
+class UploadTooLarge(ValueError):
+    pass
+
+
+async def read_upload(file, limit: int | None = None) -> bytes:
+    """Читает загруженный файл частями и обрывает, если он больше лимита (не держим в памяти гигабайты)."""
+    limit = limit or MAX_UPLOAD
+    chunks, size = [], 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            return b"".join(chunks)
+        size += len(chunk)
+        if size > limit:
+            raise UploadTooLarge(f"Файл больше {limit // (1024 * 1024)} МБ — разбейте его на части")
+        chunks.append(chunk)
+
+
 def user(request: Request) -> dict:
     return auth.current_user(request)
 

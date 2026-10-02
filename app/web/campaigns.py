@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from .. import auth, campaigns as cmp, db, leads, worker
 from ..tasks import spawn
 from ..tg import tgm
-from .common import STATE_RU, back, eta_days, local_url, page, user
+from .common import STATE_RU, back, eta_days, local_url, page, read_upload, user
 
 router = APIRouter(prefix="/campaigns")
 
@@ -76,7 +76,7 @@ async def campaigns_upload(request: Request, file: UploadFile = File(...)):
     if not accs:
         return back("/campaigns", err="Выберите хотя бы один свой подключённый аккаунт")
     try:
-        cid, n, warns = cmp.import_xlsx(await file.read(), file.filename or "список.xlsx", u["id"], accs)
+        cid, n, warns = cmp.import_xlsx(await read_upload(file), file.filename or "список.xlsx", u["id"], accs)
     except Exception as e:
         return back("/campaigns", err=f"Не удалось прочитать файл: {e}")
     return back(f"/campaigns/{cid}", msg=f"Загружено строк: {n}." + (" " + "; ".join(warns) if warns else ""))

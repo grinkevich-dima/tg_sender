@@ -221,3 +221,41 @@ def test_cli_set_password(monkeypatch, capsys):
     assert auth.authenticate("boss", "brand-new-pass")
     assert cli.main(["set-password", "nobody"]) == 1
     assert cli.main(["users"]) == 0 and "boss" in capsys.readouterr().out
+
+
+# ---- B2: перебор паролей ----
+def test_login_throttled_after_many_failures(monkeypatch):
+    make_user("admin")
+    c = browser()
+    for _ in range(8):
+        c.post("/login", data={"login": "admin", "password": "wrong-pass"})
+    r = c.post("/login", data={"login": "admin", "password": "password123"}, follow_redirects=False)
+    assert r.headers["location"].startswith("/login")                       # даже верный пароль — подождать
+    assert db.val("SELECT COUNT(*) FROM event_log WHERE text LIKE %s", ("Вход заблокирован%",)) >= 1
+    from app import cli
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: "password123")
+    cli.main(["set-password", "admin"])                                       # админ сменил пароль — блокировка снята
+    assert browser("admin").get("/me").status_code == 200
+
+
+# ---- B3: размер загрузки ----
+def test_upload_size_limited(monkeypatch):
+    from app.web import common
+    make_user("admin")
+    c = browser("admin")
+    monkeypatch.setattr(common, "MAX_UPLOAD", 1024)
+    big = b"username\n" + b"user_x\n" * 500
+    r = c.post("/leads/import-csv", files={"file": ("big.csv", big)}, follow_redirects=False)
+    assert "%D0%B1%D0%BE%D0%BB%D1%8C%D1%88%D0%B5" in r.headers["set-cookie"]   # «больше … МБ»
+    assert db.val("SELECT COUNT(*) FROM leads") == 0
+
+
+def test_xlsx_bomb_rejected():
+    import io
+    import zipfile
+    from app.xlsx import read_xlsx
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("xl/workbook.xml", b"0" * (101 * 1024 * 1024))           # сжимается в килобайты
+    with pytest.raises(ValueError, match="слишком большой после распаковки"):
+        read_xlsx(buf.getvalue())

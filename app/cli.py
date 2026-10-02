@@ -25,6 +25,7 @@ def main(argv: list[str]) -> int:
             print(err)
             return 1
         db.ex("UPDATE users SET password_hash=%s, active=true WHERE login=%s", (auth.hash_password(password), login))
+        auth.login_succeeded(login)          # снять блокировку входа после неудачных попыток
         print("Пароль изменён, пользователь включён")
         return 0
     print(__doc__)

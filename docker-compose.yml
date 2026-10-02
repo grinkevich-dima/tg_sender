@@ -33,6 +33,21 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  # Бэкап раз в сутки: дамп Postgres + архив data/ в ./backups (хранение 14 дней). Разовый: docker compose run --rm backup once
+  backup:
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-tg}
+      KEEP_DAYS: "14"
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes:
+      - ./data:/data:ro
+      - ./backups:/backups
+      - ./scripts/backup.sh:/backup.sh:ro
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    restart: unless-stopped
+
   # Тесты: docker compose run --rm tests   (или scripts/test.sh)
   tests:
     profiles: ["test"]

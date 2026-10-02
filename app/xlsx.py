@@ -25,8 +25,13 @@ def _text(el) -> str:
     return "".join(t.text or "" for t in el.iter(f"{{{NS['m']}}}t"))
 
 
+MAX_UNPACKED = 100 * 1024 * 1024     # xlsx — это zip: не даём «бомбе» распаковаться в гигабайты
+
+
 def read_xlsx(data: bytes) -> dict[str, list[list]]:
     z = zipfile.ZipFile(io.BytesIO(data))
+    if sum(i.file_size for i in z.infolist()) > MAX_UNPACKED or len(z.infolist()) > 2000:
+        raise ValueError("файл слишком большой после распаковки — похоже, это не обычная таблица")
     shared = []
     if "xl/sharedStrings.xml" in z.namelist():
         root = ET.fromstring(z.read("xl/sharedStrings.xml"))

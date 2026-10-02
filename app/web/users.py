@@ -39,9 +39,14 @@ async def login_page(request: Request, next: str = "/"):
 
 @router.post("/login")
 async def login(request: Request, login: str = Form(...), password: str = Form(...), next: str = Form("/")):
+    again = f"/login?next={local_url(next, '/')}"
+    if auth.login_blocked(login):
+        return back(again, err=f"Слишком много неудачных попыток — подождите {auth.LOCK_MINUTES} минут или попросите админа сменить пароль")
     u = auth.authenticate(login, password)
     if not u:
-        return back(f"/login?next={local_url(next, '/')}", err="Неверный логин или пароль")
+        auth.login_failed(login, request.client.host if request.client else "?")
+        return back(again, err="Неверный логин или пароль")
+    auth.login_succeeded(login)
     auth.login_session(request, u)
     return back(local_url(next, "/"))
 
@@ -96,6 +101,7 @@ async def users_password(request: Request, uid: int, password: str = Form(...)):
     if err := auth.validate_password(password):
         return back("/users" if auth.is_admin(me) else "/", err=err)
     db.ex("UPDATE users SET password_hash=%s WHERE id=%s", (auth.hash_password(password), uid))
+    auth.login_succeeded(db.val("SELECT login FROM users WHERE id=%s", (uid,)) or "")   # снять блокировку входа
     if uid == me["id"]:
         auth.login_session(request, me)     # свой вход остаётся, остальные сессии завершаются
     return back("/users" if auth.is_admin(me) else "/", msg="Пароль изменён")
