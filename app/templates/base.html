@@ -109,6 +109,7 @@
   {% endif %}
 </nav>
 <main class="container">
+  {% if not_leader %}<div class="flash err">Это вторая копия панели: уже работает другая, поэтому здесь Telegram и отправка не запущены. Остановите лишнюю копию.</div>{% endif %}
   {% if flash and flash.msg %}<div class="flash ok">{{ flash.msg }}</div>{% endif %}
   {% if flash and flash.err %}<div class="flash err">{{ flash.err }}</div>{% endif %}
   {% block content %}{% endblock %}

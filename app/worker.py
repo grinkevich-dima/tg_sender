@@ -123,8 +123,12 @@ async def stop():
     _tasks.clear()
 
 
+SYNC_EVERY = timedelta(minutes=15)
+
+
 async def account_loop(account_id: int):
     last_read_sync = datetime.min
+    last_sync = datetime.min          # первая сверка переписки — сразу после старта (A3)
     while True:
         try:
             delay = await tick(account_id)
@@ -135,6 +139,12 @@ async def account_loop(account_id: int):
                     await acc.refresh_reads()
                 except Exception as e:
                     db.log(f"Синхронизация прочтений: {e}", "warn", account_id)
+            if acc.authorized and datetime.now() - last_sync > SYNC_EVERY:
+                last_sync = datetime.now()
+                try:
+                    await acc.sync_recent()
+                except Exception as e:
+                    db.log(f"Сверка переписки: {type(e).__name__}: {e}", "warn", account_id)
         except asyncio.CancelledError:
             raise
         except Exception as e:

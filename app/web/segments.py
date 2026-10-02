@@ -6,6 +6,7 @@ from psycopg.errors import UniqueViolation
 from telethon import errors
 
 from .. import auth, db, inbox, leads, segments
+from ..tasks import spawn
 from ..tg import tgm
 from .common import back, page, user
 
@@ -103,7 +104,7 @@ async def segment_refresh_groups(request: Request, sid: int, account_id: int = F
         return back(f"/segments/{sid}", err="Выберите свой подключённый аккаунт")
     st = tgm.groups_state.get(account_id)
     if not (st and st.get("running")):
-        asyncio.create_task(tgm.refresh_groups(account_id))
+        spawn(tgm.refresh_groups(account_id), f"список групп аккаунта #{account_id}")
     return back(f"/segments/{sid}", msg="Ищу группы аккаунта… Обновите страницу через минуту")
 
 

@@ -9,6 +9,7 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 
+import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
@@ -31,6 +32,32 @@ def init(url: str = DATABASE_URL) -> None:
     migrate()
     for k, v in DEFAULT_SETTINGS.items():
         ex("INSERT INTO settings(key, value) VALUES (%s, %s) ON CONFLICT DO NOTHING", (k, v))
+
+
+# ---- одна рабочая копия ----
+LEADER_LOCK = 0x7465_6C65   # произвольный номер блокировки панели
+_leader_conn = None
+
+
+def acquire_leader(url: str = DATABASE_URL) -> bool:
+    """Telegram и отправку запускает только одна копия панели: две копии на одних сессиях Telegram
+    могут привести к принудительному завершению сессий. Блокировка держится, пока жива копия (её соединение)."""
+    global _leader_conn
+    if _leader_conn is not None:
+        return True
+    conn = psycopg.connect(url, autocommit=True)
+    if conn.execute("SELECT pg_try_advisory_lock(%s)", (LEADER_LOCK,)).fetchone()[0]:
+        _leader_conn = conn
+        return True
+    conn.close()
+    return False
+
+
+def release_leader() -> None:
+    global _leader_conn
+    if _leader_conn is not None:
+        _leader_conn.close()       # блокировка снимается вместе с соединением
+        _leader_conn = None
 
 
 def close() -> None:

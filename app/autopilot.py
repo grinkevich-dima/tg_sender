@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from telethon import errors
 
 from . import ai, db, inbox
+from .tasks import spawn
 
 NOTICE = (60, 600)                  # «заметил сообщение», сек
 READ_WPM = 220                      # скорость чтения, слов в минуту
@@ -35,7 +36,6 @@ PROMISE_RE = re.compile(r"\b(уточн\w*|узна\w* у|спрош\w* у|ве�
 # заготовка вместо факта («[ссылка]», «[цена]») — у ИИ нет нужного факта в базе знаний; такое не отправляем
 PLACEHOLDER_RE = re.compile(r"\[[^\[\]\n]{2,40}\]")
 
-_inflight: set[asyncio.Task] = set()
 
 
 # ---------- человеческая задержка (чистые функции) ----------
@@ -157,14 +157,23 @@ async def process_due() -> int:
     for job in db.q("SELECT * FROM ai_reply_jobs WHERE status='pending' AND due_at <= now() ORDER BY due_at LIMIT 20"):
         if not db.changed("UPDATE ai_reply_jobs SET status='sending' WHERE id=%s AND status='pending'", (job["id"],)):
             continue
-        t = asyncio.create_task(send_job(job))
-        _inflight.add(t)
-        t.add_done_callback(_inflight.discard)
+        spawn(send_job(job), f"автоответ лиду #{job['lead_id']}")
         started += 1
     return started
 
 
 async def send_job(job: dict) -> str:
+    """Автоответ по заданию. Любая неожиданная ошибка — задание failed и «нужен человек», а не вечное «отправляется»."""
+    try:
+        return await _send_job(job)
+    except Exception as e:
+        _finish(job["id"], "failed", f"{type(e).__name__}: {e}"[:300])
+        handoff(job["lead_id"], f"сбой автоответа: {type(e).__name__}", job["account_id"])
+        db.log(f"Автоответ лиду #{job['lead_id']}: {type(e).__name__}: {e}", "error", job["account_id"])
+        return "failed"
+
+
+async def _send_job(job: dict) -> str:
     """Проверить, что отвечать всё ещё можно, написать ответ, «печатать» и отправить."""
     from .tg import tgm
     from .worker import TRANSIENT_ERRORS, _flood, account, in_work_hours, paused_until
@@ -194,6 +203,7 @@ async def send_job(job: dict) -> str:
         handoff(lead_id, f"лимит автоответов ({cap} в сутки)", acc_id)
         return "handoff"
 
+    started = db.now_utc()          # всё, что клиент пришлёт после этого момента, войдёт в следующий ответ (A1)
     msgs, _ = ai.build_messages(lead, job["profile_id"])
     msgs[0]["content"] += "\n\n" + AUTOPILOT_RULE
     try:
@@ -236,6 +246,12 @@ async def send_job(job: dict) -> str:
     if PROMISE_RE.search(text):
         db.ex("UPDATE leads SET ai_handoff=%s, ai_handoff_at=now() WHERE id=%s",
               ("ИИ пообещал уточнить — нужен ответ человека", lead_id))
+        return "sent"
+    # клиент дописал, пока ИИ писал и «печатал»: это не вошло в ответ — планируем следующий
+    newer = db.one("""SELECT text FROM messages WHERE lead_id=%s AND direction='in' AND created_at > %s
+                      ORDER BY created_at DESC, id DESC LIMIT 1""", (lead_id, started))
+    if newer:
+        schedule(db.one("SELECT * FROM leads WHERE id=%s", (lead_id,)), acc_id, camp, newer["text"] or "", None)
     return "sent"
 
 

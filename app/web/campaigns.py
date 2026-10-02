@@ -1,5 +1,4 @@
 """Кампании: создание из шаблона или из xlsx, фильтры, очередь, поиск получателей, отчёт."""
-import asyncio
 import csv
 import io
 
@@ -7,6 +6,7 @@ from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 from .. import auth, campaigns as cmp, db, leads, worker
+from ..tasks import spawn
 from ..tg import tgm
 from .common import STATE_RU, back, eta_days, local_url, page, user
 
@@ -266,7 +266,7 @@ async def campaign_action(request: Request, cid: int, action: str):
     elif action == "prepare":
         st = tgm.prepare_state.get(cid)
         if not (st and st.get("running")):
-            asyncio.create_task(tgm.prepare_campaign(cid))
+            spawn(tgm.prepare_campaign(cid), f"поиск получателей кампании #{cid}")
         return back(f"/campaigns/{cid}", msg="Ищу получателей: загружаю диалоги и участников чатов…")
     elif action == "delete":
         db.ex("DELETE FROM campaigns WHERE id=%s", (cid,))

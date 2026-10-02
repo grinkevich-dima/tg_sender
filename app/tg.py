@@ -8,13 +8,13 @@ from telethon.tl.functions.contacts import GetContactsRequest
 from telethon.tl.types import User
 
 from . import ai, autopilot, db, inbox, leads
+from .tasks import spawn
 from .config import API_HASH, API_ID, SESSIONS_DIR
 
 # Точка расширения: сюда подключится ИИ-разбор ответов.
 # Каждый хук получает (account_client, event, lead_row | None).
 IncomingHook = Callable[["AccountClient", events.NewMessage.Event, object], Awaitable[None]]
 incoming_hooks: list[IncomingHook] = []
-_background: set[asyncio.Task] = set()     # держим ссылки на фоновые задачи, чтобы их не собрал сборщик мусора
 
 CODE_WHERE = {"App": "в приложение Telegram (чат «Telegram»)", "Sms": "по SMS", "Call": "звонком",
               "FlashCall": "flash-звонком", "MissedCall": "пропущенным звонком (последние цифры номера)",
@@ -55,6 +55,7 @@ class AccountClient:
             str(self.session_path), API_ID, API_HASH,
             device_model="TG Sender Panel", system_version="1.0", app_version="2.0",
             flood_sleep_threshold=0,  # FloodWait обрабатываем сами
+            catch_up=True,            # после переподключения догрузить события, пропущенные пока панель не работала
         )
         self._register_handlers()
         await self.client.connect()
@@ -384,6 +385,39 @@ class AccountClient:
         st["found"] += len(people) - len(missing)
         st["total"] += len(people)
 
+    # ---------- догрузка пропущенной переписки ----------
+    async def sync_recent(self, limit: int = 100) -> int:
+        """Сверка последних диалогов аккаунта с перепиской в панели: всё, что пришло или ушло, пока панель не работала
+        (или событие потерялось), дописывается в историю и проходит обычную обработку (ответ, отписка, автопилот).
+        Возвращает, сколько сообщений дописано."""
+        found: list[tuple[int, object]] = []
+        async with self.lock:
+            async for d in self.client.iter_dialogs(limit=limit):
+                if not d.is_user or d.message is None:
+                    continue
+                lead = db.one("SELECT id FROM leads WHERE tg_id=%s AND (owner_account_id=%s OR owner_account_id IS NULL)",
+                              (d.id, self.id))
+                if not lead:
+                    continue
+                known = db.val("""SELECT COALESCE(MAX(tg_message_id), 0) FROM messages
+                                  WHERE account_id=%s AND lead_id=%s""", (self.id, lead["id"])) or 0
+                if not known or d.message.id <= known:
+                    continue        # переписки в панели ещё нет (чужой личный диалог) или всё уже есть
+                msgs = await self.client.get_messages(d.entity, min_id=known, limit=30)
+                found += [(d.id, m) for m in reversed(msgs)]
+        added = 0
+        for peer_id, m in found:
+            text = getattr(m, "message", None) or ""
+            if getattr(m, "out", False):
+                added += bool(self.handle_outgoing(peer_id, text, m.id))
+            else:
+                before = db.val("SELECT COUNT(*) FROM messages WHERE account_id=%s AND direction='in'", (self.id,))
+                await self.handle_incoming(peer_id, text, m.id)
+                added += (db.val("SELECT COUNT(*) FROM messages WHERE account_id=%s AND direction='in'", (self.id,)) or 0) - before
+        if added:
+            db.log(f"Догружено пропущенных сообщений: {added}", account_id=self.id)
+        return added
+
     # ---------- прочтения ----------
     async def refresh_reads(self) -> int:
         """Досинхронизация прочтений (если панель была выключена, когда их читали)."""
@@ -448,9 +482,7 @@ class AccountClient:
             except RuntimeError:
                 loop = None                           # вне цикла (скрипты, тесты) — проверку запускает вызывающий
             if loop:
-                t = loop.create_task(autopilot.check_manual(self.id, lead["id"], tg_message_id))
-                _background.add(t)
-                t.add_done_callback(_background.discard)
+                spawn(autopilot.check_manual(self.id, lead["id"], tg_message_id), "проверка: менеджер написал сам")
         return new
 
     async def handle_incoming(self, uid: int, text: str | None, tg_message_id: int | None, event=None):
@@ -460,9 +492,7 @@ class AccountClient:
                 mid = db.val("""SELECT id FROM messages WHERE account_id=%s AND lead_id=%s AND direction='in'
                                 AND tg_message_id=%s""", (self.id, lead["id"], tg_message_id))
                 # разбор ответа ИИ и автоответ (если включён в кампании) — в фоне, приём не ждёт
-                t = asyncio.create_task(autopilot.after_incoming(mid, lead["id"], self.id))
-                _background.add(t)
-                t.add_done_callback(_background.discard)
+                spawn(autopilot.after_incoming(mid, lead["id"], self.id), f"разбор и автоответ лиду #{lead['id']}")
             inbox.auto_stage(lead["id"], "replied")
             db.ex("""UPDATE campaign_leads SET state='replied', replied_at=now(), next_step_at=NULL,
                      chain_note=CASE WHEN next_step_at IS NOT NULL THEN 'дожимы остановлены: ответил' ELSE chain_note END

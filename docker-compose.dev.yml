@@ -1,0 +1,9 @@
+# Режим разработки: код подхватывается из папки app/ на лету.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# Не используйте его для рабочей панели: любая правка или смена ветки сразу попадёт «в бой».
+services:
+  tg-sender:
+    volumes:
+      - ./data:/app/data
+      - ./app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]

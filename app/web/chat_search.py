@@ -1,10 +1,9 @@
 """Поиск групп: темы поиска, ручные ссылки, список найденных групп со статусами."""
-import asyncio
-
 from fastapi import APIRouter, Form, Request
 
 from .. import auth, chat_search as cs, db
 from ..tg import tgm
+from ..tasks import spawn
 from .common import back, local_url, page, user
 
 router = APIRouter(prefix="/chat-search")
@@ -78,7 +77,7 @@ async def search_create(request: Request, name: str = Form(""), keywords: str = 
                    VALUES (%s, %s, %s, %s, %s, %s) RETURNING id""",
                 (name.strip() or ", ".join(kws[:3]), kws, cs.split_words(geo), cs.split_words(stop_words),
                  account_id, user(request)["id"]))
-    asyncio.create_task(tgm.run_chat_search(sid, account_id))
+    spawn(tgm.run_chat_search(sid, account_id), f"поиск групп #{sid}")
     n = len(cs.build_queries(kws, cs.split_words(geo)))
     return back(f"/chat-search?search={sid}&status=all",
                 msg=f"Поиск запущен: {n} запросов с паузами, это займёт несколько минут. Отправка с аккаунта на это время стоит")
@@ -98,7 +97,7 @@ async def search_links(request: Request, links: str = Form(""), keywords: str = 
                    VALUES (%s, %s, %s, %s, %s) RETURNING id""",
                 (f"Ссылки ({len(lines)})", cs.split_words(keywords), cs.split_words(stop_words), account_id,
                  user(request)["id"]))
-    asyncio.create_task(tgm.run_chat_search(sid, account_id, links=lines))
+    spawn(tgm.run_chat_search(sid, account_id, links=lines), f"проверка ссылок #{sid}")
     return back(f"/chat-search?search={sid}&status=all", msg=f"Проверяю ссылки: {len(lines)}")
 
 
@@ -116,7 +115,7 @@ async def search_rerun(request: Request, sid: int):
         return back("/chat-search", err="Повторить может владелец аккаунта этого поиска")
     if _busy(s["account_id"]):
         return back("/chat-search", err="Аккаунт уже занят поиском — дождитесь окончания")
-    asyncio.create_task(tgm.run_chat_search(sid, s["account_id"]))
+    spawn(tgm.run_chat_search(sid, s["account_id"]), f"поиск групп #{sid}")
     return back(f"/chat-search?search={sid}&status=all", msg="Поиск запущен заново: новые группы добавятся, оценки обновятся")
 
 

@@ -15,12 +15,19 @@ from .web import accounts, ai_routes, campaigns, chat_search, inbox, leads, misc
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init()
-    await tgm.start_all()
-    task = asyncio.create_task(worker.run())
+    app.state.leader = db.acquire_leader()
+    task = None
+    if app.state.leader:
+        await tgm.start_all()
+        task = asyncio.create_task(worker.run())
+    else:
+        db.log("Уже работает другая копия панели: в этой Telegram и отправка не запущены (защита сессий)", "error")
     yield
-    task.cancel()
-    await worker.stop()
-    await tgm.stop_all()
+    if task:
+        task.cancel()
+        await worker.stop()
+        await tgm.stop_all()
+    db.release_leader()
     db.close()
 
 
