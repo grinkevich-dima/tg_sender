@@ -121,9 +121,39 @@ def lead_profile(lead_id: int) -> int | None:
 
 
 def _history(lead_id: int) -> list[dict]:
-    rows = db.q("""SELECT direction, text FROM messages WHERE lead_id=%s AND COALESCE(text,'') != ''
+    rows = db.q("""SELECT direction, text, created_at FROM messages WHERE lead_id=%s AND COALESCE(text,'') != ''
                    ORDER BY created_at DESC, id DESC LIMIT %s""", (lead_id, HISTORY))
     return list(reversed(rows))
+
+
+LIVE_CHAT = 6 * 3600        # сек: наше последнее сообщение моложе — разговор живой, «напоминать о себе» рано
+
+
+def _ago(seconds: float) -> str:
+    m = int(seconds // 60)
+    if m < 1:
+        return "меньше минуты"
+    if m < 60:
+        return f"{m} мин"
+    if m < 48 * 60:
+        return f"{m // 60} ч"
+    return f"{m // 1440} дн"
+
+
+def _we_wrote_last_task(history: list[dict]) -> str:
+    """Задание, когда последним писали мы: живой разговор — продолжить по теме; давно молчит — мягко напомнить."""
+    last = history[-1].get("created_at") if history else None
+    if last is None:            # время неизвестно (тренажёр без времени)
+        return (f"{SERVICE}: последним писали мы, клиент пока не ответил. Продолжи разговор по теме последних сообщений — "
+                "дополни нашу мысль или задай вопрос по теме; не повторяй сказанное и не спрашивай, ответил ли клиент.")
+    ago = (db.now_utc() - last).total_seconds()
+    if ago < LIVE_CHAT:
+        return (f"{SERVICE}: последним писали мы, {_ago(ago)} назад, — разговор идёт сейчас, клиент просто ещё не ответил. "
+                "Продолжи разговор по теме последних сообщений — дополни нашу мысль, добавь деталь или задай вопрос по теме, "
+                "в том же тоне и такой же длины, как наши реплики. Не напоминай о себе, не спрашивай, «как дела» и ответил ли "
+                "клиент, не возвращайся к старым темам.")
+    return (f"{SERVICE}: последним писали мы, {_ago(ago)} назад, ответа нет. Напиши короткое ненавязчивое продолжение "
+            "по теме нашего последнего разговора, в том же тоне; не повторяй сказанное и не дави.")
 
 
 def _person(lead: dict) -> str:
@@ -182,6 +212,9 @@ def build_messages(lead: dict, profile_id: int | None, history: list[dict] | Non
     system.append("Отвечай только готовым текстом сообщения для клиента — без кавычек, пометок, вариантов и заготовок "
                   "в квадратных скобках вроде [тема] или [имя]. Не придумывай ссылки, цены, даты и факты о клиенте: "
                   "используй только базу знаний, переписку и данные о клиенте.")
+    system.append("Тон бери из этой переписки: если мы с клиентом на «ты», пишем коротко, неформально, строчными буквами, "
+                  "со смайлами-скобками — пиши так же. Тон и обращение, сложившиеся в переписке, важнее общих указаний "
+                  "о тоне и длине выше; общие указания — для нового разговора.")
     system.append(f"Данные о клиенте:\n{_person(lead)}")
     if cards:
         system.append("База знаний:\n" + "\n\n".join(f"### {c['title']}\n{c['body']}" for c in cards))
@@ -196,8 +229,7 @@ def build_messages(lead: dict, profile_id: int | None, history: list[dict] | Non
                      "обратись по имени и мягко подведи к цели из инструкции. Где и как мы познакомились, упоминай только "
                      "если это есть в данных о клиенте (группа, заметка) — не выдумывай. Не больше 3–4 предложений."})
     elif turns[-1]["role"] == "assistant":   # последним писали мы — клиент ещё не ответил
-        msgs.append({"role": "user", "content": f"{SERVICE}: клиент ещё не ответил на наше последнее сообщение. "
-                     "Напиши следующее сообщение от нас — не повторяй уже сказанное."})
+        msgs.append({"role": "user", "content": _we_wrote_last_task(history)})
     if debug is not None:
         debug.update(profile=profile["name"] if profile else None, cards=[c["title"] for c in cards],
                      examples=len(examples), system=msgs[0]["content"], person=_person(lead),

@@ -197,7 +197,7 @@ def test_dialog_turns_roles_and_merging():
     # последним писали мы — служебное задание, помеченное как не от клиента
     lead = {"id": 0, "first_name": "Ирина", "last_name": "", "title": None, "extra": {}, "stage_id": None, "note": ""}
     msgs, last_in = ai.build_messages(lead, None, history=hist[:4])
-    assert msgs[-1]["role"] == "user" and msgs[-1]["content"].startswith("[Служебно, не от клиента]: клиент ещё не ответил")
+    assert msgs[-1]["role"] == "user" and msgs[-1]["content"].startswith("[Служебно, не от клиента]: последним писали мы")
     assert last_in == "Вы кто?"
     msgs, _ = ai.build_messages(lead, None, history=hist[:3])
     assert msgs[-1] == {"role": "user", "content": "Добрый день.\nВы кто?"}       # ответ на реплику клиента — без заданий
@@ -212,3 +212,18 @@ def test_classify_marks_sides(monkeypatch):
     monkeypatch.setattr(ai, "chat", chat)
     run(ai.classify([{"direction": "out", "text": "Есть задача по сайту?"}, {"direction": "in", "text": "А вы кто?"}]))
     assert "МЫ: Есть задача по сайту?\nКЛИЕНТ: А вы кто?" in seen[0] and "последнего сообщения КЛИЕНТА: «А вы кто?»" in seen[0]
+
+
+def test_we_wrote_last_live_chat_vs_silence():
+    """Последним писали мы: минуту назад — продолжить разговор, а не «вы там как?»; дни назад — мягко напомнить."""
+    from datetime import timedelta
+    lead = {"id": 0, "first_name": "Рома", "last_name": "", "title": None, "extra": {}, "stage_id": None, "note": ""}
+    now = db.now_utc()
+    hist = [{"direction": "in", "text": "теперь я 44)))", "created_at": now - timedelta(minutes=8)},
+            {"direction": "out", "text": "видимо пропихнули и обратно отправили)", "created_at": now - timedelta(minutes=1)}]
+    task = ai.build_messages(lead, None, history=hist)[0][-1]["content"]
+    assert "разговор идёт сейчас" in task and "Не напоминай о себе" in task
+    hist[-1]["created_at"] = now - timedelta(days=3)
+    task = ai.build_messages(lead, None, history=hist)[0][-1]["content"]
+    assert "3 дн назад, ответа нет" in task
+    assert "Тон бери из этой переписки" in ai.build_messages(lead, None, history=hist)[0][0]["content"]

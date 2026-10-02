@@ -31,7 +31,8 @@ def messages(sid: int) -> list[dict]:
 
 
 def _history(sid: int) -> list[dict]:
-    return [{"direction": "in" if m["role"] == "client" else "out", "text": m["text"]} for m in messages(sid)]
+    return [{"direction": "in" if m["role"] == "client" else "out", "text": m["text"], "created_at": m.get("created_at")}
+            for m in messages(sid)]
 
 
 def fake_lead(client: dict) -> dict:
