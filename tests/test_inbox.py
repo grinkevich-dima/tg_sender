@@ -137,3 +137,22 @@ def test_stages_admin():
     browser("anna").post("/settings/stages/add", data={"name": "менеджерский"})
     assert not db.one("SELECT 1 FROM funnel_stages WHERE name='менеджерский'")
     assert c.get("/settings").status_code == 200
+
+
+def test_deleted_in_telegram_is_marked_not_removed():
+    """Сообщение удалили в Telegram: остаётся в инбоксе с пометкой, ИИ его не видит, пометка приходит и без перезагрузки."""
+    from app import ai
+    u = make_user()
+    a, lid = _conversation(u)
+    run(tgm.get(a).handle_incoming(500, "Сколько стоит?", 77))
+    run(tgm.get(a).handle_incoming(500, "ой, не туда", 78))
+    other = make_account(u["id"], label="B")
+    assert tgm.get(other).mark_deleted([78]) == 0                  # id сообщений — свои у каждого аккаунта
+    assert tgm.get(a).mark_deleted([78, 999]) == 1
+    texts = [r["text"] for r in ai._history(lid)]
+    assert "Сколько стоит?" in texts and "ой, не туда" not in texts
+    c = browser("admin")
+    html = c.get(f"/inbox/{lid}").text
+    assert 'class="msg in deleted"' in html
+    mid = db.val("SELECT id FROM messages WHERE tg_message_id=78")
+    assert mid in c.get(f"/inbox/{lid}/messages?after=0").json()["deleted"]

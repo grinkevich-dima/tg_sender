@@ -239,6 +239,13 @@ class AccountClient(LoginMixin, GroupsMixin):
         async def on_incoming(event):
             await self.handle_incoming(event.sender_id, event.raw_text, event.id, event, date=event.date)
 
+        @c.on(events.MessageDeleted)
+        async def on_deleted(event):
+            # в личных чатах id сообщений уникальны в пределах аккаунта, а чат Telegram не сообщает (chat_id пуст);
+            # удаления в каналах и супергруппах (chat_id задан) нас не касаются
+            if event.chat_id is None and event.deleted_ids:
+                self.mark_deleted(event.deleted_ids)
+
         @c.on(events.NewMessage(outgoing=True, func=lambda e: e.is_private))
         async def on_outgoing(event):
             # менеджер написал лиду прямо в Telegram — сохраняем в историю инбокса
@@ -265,6 +272,11 @@ class AccountClient(LoginMixin, GroupsMixin):
             if loop:
                 spawn(autopilot.check_manual(self.id, lead["id"], tg_message_id), "проверка: менеджер написал сам")
         return new
+
+    def mark_deleted(self, tg_ids: list[int]) -> int:
+        """Сообщения удалили в Telegram — помечаем (не стираем): в инбоксе видно, ИИ их больше не учитывает."""
+        return db.changed("""UPDATE messages SET deleted_at=now() WHERE account_id=%s AND tg_message_id = ANY(%s)
+                             AND deleted_at IS NULL""", (self.id, list(tg_ids)))
 
     async def handle_incoming(self, uid: int, text: str | None, tg_message_id: int | None, event=None, date=None):
         lead = db.one("SELECT * FROM leads WHERE tg_id=%s", (uid,))

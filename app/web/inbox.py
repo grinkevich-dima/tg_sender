@@ -127,8 +127,9 @@ async def dialog_new_messages(request: Request, lead_id: int, after: int = 0):
                    ORDER BY created_at, id""", (lead_id, after))
     if any(r["direction"] == "in" for r in rows):
         inbox.mark_read(lead_id)
+    deleted = [r["id"] for r in db.q("SELECT id FROM messages WHERE lead_id=%s AND deleted_at IS NOT NULL", (lead_id,))]
     return {"messages": [{**r, "created_at": r["created_at"].astimezone(db.now_local().tzinfo).strftime("%d.%m %H:%M")}
-                         for r in rows]}
+                         for r in rows], "deleted": deleted}
 
 
 def _back_to(lead_id: int, request: Request) -> str:

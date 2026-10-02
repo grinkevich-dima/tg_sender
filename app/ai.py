@@ -122,7 +122,7 @@ def lead_profile(lead_id: int) -> int | None:
 
 def _history(lead_id: int) -> list[dict]:
     rows = db.q("""SELECT direction, text, created_at FROM messages WHERE lead_id=%s AND COALESCE(text,'') != ''
-                   ORDER BY created_at DESC, id DESC LIMIT %s""", (lead_id, HISTORY))
+                   AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT %s""", (lead_id, HISTORY))
     return list(reversed(rows))
 
 
@@ -305,7 +305,7 @@ async def classify_message(message_id: int) -> str | None:
     if not m or not configured():
         return None
     rows = db.q("""SELECT direction, text FROM messages WHERE lead_id=%s AND id <= %s AND COALESCE(text,'') != ''
-                   ORDER BY created_at DESC, id DESC LIMIT 8""", (m["lead_id"], message_id))
+                   AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 8""", (m["lead_id"], message_id))
     try:
         label, note = await classify(list(reversed(rows)))
     except AIError as e:

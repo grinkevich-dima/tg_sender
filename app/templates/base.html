@@ -52,6 +52,9 @@
   .sbx { border:1px solid var(--pico-muted-border-color); border-radius:12px; overflow:hidden; }
   .sbx-chat { border:none; border-radius:0; height: calc(100vh - 330px); min-height: 320px; max-height:none; }
   .msg.pending { opacity:.65; }
+  .msg.deleted { background:#fee2e2; color:#991b1b; opacity:.75; }
+  .msg.deleted .t { text-decoration:line-through; }
+  .msg.deleted > .t + .meta::after { content:" · 🗑 удалено в Telegram"; }
   .msg.typing { padding:.55rem .8rem; }
   .dots { display:inline-flex; gap:4px; } .dots i { width:7px; height:7px; border-radius:50%; background:currentColor; opacity:.35;
     animation: blink 1.2s infinite ease-in-out; } .dots i:nth-child(2) { animation-delay:.2s; } .dots i:nth-child(3) { animation-delay:.4s; }

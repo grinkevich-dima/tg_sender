@@ -54,7 +54,7 @@
     <div class="chat" id="chat">
       {% for m in msgs %}
       {% set src = [] %}{% if m.direction == 'out' %}{% set _ = src.append(SOURCE_RU.get(m.source, '') ~ (' «' ~ m.campaign_name ~ '»' if m.campaign_name else '')) %}{% if m.sender_name %}{% set _ = src.append(m.sender_name) %}{% endif %}{% endif %}
-      <div class="msg {{ m.direction }}" data-id="{{ m.id }}"><span class="t">{{ m.text or '—' }}</span><span class="meta">{{ ([m.created_at|dt] + src|select|list)|join(' · ') }}</span>
+      <div class="msg {{ m.direction }}{{ ' deleted' if m.deleted_at }}" data-id="{{ m.id }}"{% if m.deleted_at %} title="Удалено в Telegram {{ m.deleted_at|dt }}"{% endif %}><span class="t">{{ m.text or '—' }}</span><span class="meta">{{ ([m.created_at|dt] + src|select|list)|join(' · ') }}</span>
         {% if m.ai_label %}<span class="meta">ИИ: <b>{{ LABELS[m.ai_label] }}</b>{% if m.ai_note %} — {{ m.ai_note }}{% endif %}
           {% if (m.ai_label in LABEL_STAGE or m.ai_label == 'stop') and loop.last %}
           <form method="post" action="/inbox/{{ lead.id }}/apply-label/{{ m.id }}{{ '?' ~ qs if qs else '' }}" style="display:inline"
@@ -151,11 +151,15 @@
       const j = await (await fetch('/inbox/{{ lead.id }}/messages?after=' + last)).json();
       for (const m of j.messages) {
         const div = document.createElement('div');
-        div.className = 'msg ' + m.direction;
+        div.className = 'msg ' + m.direction; div.dataset.id = m.id;
         const t = document.createElement('span'); t.className = 't'; t.textContent = m.text || '—'; div.appendChild(t);
         const meta = document.createElement('span'); meta.className = 'meta'; meta.textContent = m.created_at;
         div.appendChild(meta); chat.appendChild(div); last = Math.max(last, m.id);
         chat.scrollTop = chat.scrollHeight;
+      }
+      for (const id of j.deleted || []) {          // удалили в Telegram — помечаем без перезагрузки
+        const d = chat.querySelector(`.msg[data-id="${id}"]`);
+        if (d && !d.classList.contains('deleted')) { d.classList.add('deleted'); d.title = 'Удалено в Telegram'; }
       }
     } catch (e) {}
   }, 5000);
