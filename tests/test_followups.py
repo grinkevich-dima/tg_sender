@@ -164,3 +164,30 @@ def test_chain_editing_via_panel():
     assert len(campaigns.followups(cid)) == 2
     html = c.get(f"/campaigns/{cid}").text
     assert "Цепочка" in html and "новый текст" in html and "Дожим 1" in html
+
+
+def test_followups_take_only_their_share_while_first_messages_wait():
+    """F2: дожимы — не больше доли лимита, пока ждут первые сообщения; потом — весь остаток."""
+    u = make_user()
+    client = FakeClient()
+    a = make_account(u["id"], client=client, warmup_start=10, warmup_step=0)
+    db.set_setting("followup_share", "20")                     # 20 % от 10 = 2 дожима
+    cid = make_campaign(u["id"], [a])
+    add_step(cid, 2, "Дожим")
+    rows = add_rows(cid, [make_lead(tg_id=300 + i, first_name=f"Л{i}") for i in range(6)])
+    campaigns.enqueue(cid, {"state": ["new"]})
+    db.ex("UPDATE campaign_leads SET state='new' WHERE id = ANY(%s)", (rows[3:],))   # пока в очереди только трое
+    drain(a, 3)
+    db.ex("UPDATE campaign_leads SET state='queued' WHERE id = ANY(%s)", (rows[3:],))
+    for r in rows[:3]:
+        make_due(r)
+    drain(a, 6)
+    assert [t for _, t, _ in client.sent][3:] == ["Дожим", "Дожим", "Привет, Л3!", "Привет, Л4!", "Привет, Л5!", "Дожим"]
+    assert worker.sent_today_split(a) == (6, 3)
+
+
+def test_dashboard_shows_first_and_followups():
+    u = make_user()
+    a = make_account(u["id"])
+    html = browser("admin").get("/").text
+    assert "первых 0" in html and "дожимов 0" in html and a

@@ -8,8 +8,9 @@
 {% for a in accs %}
   <div class="stat"><small><a href="/accounts/{{ a.id }}">{{ a.label or a.first_name or ('#' ~ a.id) }}</a></small>
     <b>{{ a.sent_today }} / {{ a.limit }}</b>
+    <small class="muted">сегодня: первых {{ a.sent_first }} · дожимов {{ a.sent_fu }}</small>
     <small>{% if not a.authorized %}<span class="log-error">не подключён</span>{% elif a.paused %}<span class="log-warn">ограничение до {{ a.paused|dt }}</span>{% else %}{{ a.wstate.status or '—' }}{% endif %}
-      · в очереди {{ a.queued }}</small></div>
+      · в очереди {{ a.queued }}{% if a.fu_due %} · дожимов ждёт {{ a.fu_due }}{% endif %}</small></div>
 {% endfor %}
   <div class="stat"><small>Лидов в базе</small><b>{{ leads_n }}</b></div>
 </div>

@@ -4,6 +4,7 @@
 останавливает только его очередь — чужие аккаунты его лидов не подхватывают.
 """
 import asyncio
+import math
 import random
 from datetime import date, datetime, time, timedelta
 
@@ -44,14 +45,31 @@ def warmup_day(acc: dict) -> int:
     return (db.today() - start).days + 1 if start else 0
 
 
-def sent_today(account_id: int) -> int:
-    """Сообщения кампаний за сегодня (первые и дожимы) — то, что расходует дневной лимит. Ответы из инбокса не считаются.
+def sent_today_split(account_id: int) -> tuple[int, int]:
+    """Сообщения кампаний за сегодня: (первые, дожимы). Вместе расходуют дневной лимит; ответы из инбокса не считаются.
     «Сегодня» — по часовому поясу аккаунта."""
     tz = db.account_tz(account(account_id))
     start = datetime.combine(datetime.now(tz).date(), time.min, tzinfo=tz)
-    return db.val("""SELECT COUNT(*) FROM messages WHERE account_id=%s AND direction='out' AND source='campaign'
-                     AND created_at >= %s AND created_at < %s""",
-                  (account_id, start, start + timedelta(days=1))) or 0
+    r = db.one("""SELECT COUNT(*) FILTER (WHERE COALESCE(step, 1) = 1) first, COUNT(*) FILTER (WHERE step > 1) fu
+                  FROM messages WHERE account_id=%s AND direction='out' AND source='campaign'
+                  AND created_at >= %s AND created_at < %s""", (account_id, start, start + timedelta(days=1)))
+    return r["first"] or 0, r["fu"] or 0
+
+
+def sent_today(account_id: int) -> int:
+    return sum(sent_today_split(account_id))
+
+
+def followup_share() -> int:
+    """Какую долю дневного лимита дожимы могут занять, пока ждут первые сообщения (%)."""
+    v = db.get_setting("followup_share")
+    return min(int(v), 100) if v.isdigit() else 50
+
+
+def followup_quota_used(acc: dict) -> bool:
+    """Дожимы уже израсходовали свою долю лимита — дальше очередь первых сообщений (если она есть)."""
+    _, fu = sent_today_split(acc["id"])
+    return fu >= math.ceil(daily_limit(acc) * followup_share() / 100)
 
 
 def in_work_hours(acc: dict, now: datetime | None = None) -> bool:
@@ -163,8 +181,15 @@ def _status(account_id: int, text: str, next_at=None) -> None:
     state[account_id] = {"status": text, "next_send_at": next_at}
 
 
+def followups_due(account_id: int) -> int:
+    return db.val("""SELECT COUNT(*) FROM campaign_leads cl JOIN campaigns c ON c.id=cl.campaign_id
+                     WHERE cl.account_id=%s AND cl.next_step_at <= now() AND cl.state IN ('sent','read')
+                       AND c.status='running'""", (account_id,)) or 0
+
+
 def due_followup(account_id: int) -> dict | None:
-    """Дожим, время которого пришло (в запущенных кампаниях). Идут раньше новых первых сообщений."""
+    """Дожим, время которого пришло (в запущенных кампаниях). Идут раньше новых первых сообщений,
+    но не дальше своей доли дневного лимита, если первые сообщения ждут (followup_quota_used)."""
     return db.one("""SELECT cl.* FROM campaign_leads cl JOIN campaigns c ON c.id=cl.campaign_id
                      WHERE cl.account_id=%s AND cl.next_step_at <= now() AND cl.state IN ('sent','read')
                        AND c.status='running'
@@ -195,8 +220,10 @@ async def tick(account_id: int) -> float:
         _status(account_id, f"пауза до {pu.astimezone(db.now_local().tzinfo):%d.%m %H:%M} ({acc['pause_reason'] or 'ограничение Telegram'})")
         return min(60, (pu - db.now_utc()).total_seconds() + 1)
 
-    followup = due_followup(account_id)
-    item = followup or next_item(account_id)
+    followup, first = due_followup(account_id), next_item(account_id)
+    if followup and first and followup_quota_used(acc):
+        followup = None         # дожимы взяли свою долю лимита — теперь очередь первых сообщений
+    item = followup or first
     if not item:
         _status(account_id, "очередь пуста")
         return 30

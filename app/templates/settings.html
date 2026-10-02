@@ -22,6 +22,8 @@
 <hr>
 <label style="margin-top:1rem">Не писать одному человеку чаще раза в, дней<input type="number" name="recontact_days" value="{{ recontact_days }}" min="0" max="3650"></label>
 <small class="muted">Касается личных сообщений из разных кампаний: если лиду уже писали за этот срок, при постановке в очередь он будет пропущен с объяснением. Чатов не касается.</small>
+<label style="margin-top:1rem">Дожимы могут занять дневного лимита, %<input type="number" name="followup_share" value="{{ followup_share }}" min="0" max="100"></label>
+<small class="muted">Дожимы идут раньше первых сообщений, но не больше этой доли лимита аккаунта, пока первые сообщения ждут в очереди. Нет первых сообщений — дожимы берут весь лимит. 100 — дожимы всегда первыми, 0 — первые сообщения всегда первыми.</small>
 </article>
 <button>Сохранить</button>
 </form>

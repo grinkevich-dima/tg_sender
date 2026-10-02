@@ -15,7 +15,9 @@ async def dashboard(request: Request):
     accs = auth.user_accounts(u)
     for a in accs:
         a["authorized"] = tgm.get(a["id"]).authorized
-        a["sent_today"] = worker.sent_today(a["id"])
+        a["sent_first"], a["sent_fu"] = worker.sent_today_split(a["id"])
+        a["sent_today"] = a["sent_first"] + a["sent_fu"]
+        a["fu_due"] = worker.followups_due(a["id"])
         a["limit"] = worker.daily_limit(a)
         a["queued"] = db.val("SELECT COUNT(*) FROM campaign_leads WHERE account_id=%s AND state='queued'", (a["id"],))
         a["wstate"] = worker.state.get(a["id"], {})
@@ -56,7 +58,7 @@ async def settings_page(request: Request):
         return back("/", err="Общие настройки меняет админ. Лимиты своего аккаунта — в разделе «Аккаунты»")
     return page(request, "settings.html", stop_words=db.get_setting("stop_words"),
                 recontact_days=recontact_days(), stages=inbox.funnel(),
-                autopilot=db.get_setting("ai_autopilot") == "1", autopilot_daily=db.get_setting("ai_autopilot_daily"),
+                autopilot=db.get_setting("ai_autopilot") == "1", autopilot_daily=db.get_setting("ai_autopilot_daily"), followup_share=worker.followup_share(),
                 autopilot_account_daily=db.get_setting("ai_autopilot_account_daily"),
                 log_keep_days=db.get_setting("log_keep_days"), notify_account=db.get_setting("notify_account_id"),
                 accounts=[a for a in auth.user_accounts(user(request), only_active=True) if tgm.get(a["id"]).authorized])
@@ -65,7 +67,7 @@ async def settings_page(request: Request):
 @router.post("/settings")
 async def settings_save(request: Request, stop_words: str = Form(""), recontact_days: str = Form("30"),
                         ai_autopilot: str = Form(""), ai_autopilot_daily: str = Form("5"),
-                        ai_autopilot_account_daily: str = Form("50"), log_keep_days: str = Form("90")):
+                        ai_autopilot_account_daily: str = Form("50"), followup_share: str = Form("50"), log_keep_days: str = Form("90")):
     if not auth.is_admin(user(request)):
         return back("/", err="Только админ")
     if not (recontact_days.strip().isdigit() and int(recontact_days) <= 3650):
@@ -75,6 +77,9 @@ async def settings_save(request: Request, stop_words: str = Form(""), recontact_
         return back("/settings", err="Нужно хотя бы одно стоп-слово — иначе отказ не сработает")
     db.set_setting("stop_words", words)
     db.set_setting("recontact_days", str(int(recontact_days)))
+    if not (followup_share.strip().isdigit() and int(followup_share) <= 100):
+        return back("/settings", err="Доля дожимов — от 0 до 100 %")
+    db.set_setting("followup_share", str(int(followup_share)))
     if not (ai_autopilot_daily.strip().isdigit() and 1 <= int(ai_autopilot_daily) <= 50):
         return back("/settings", err="Лимит автоответов — от 1 до 50 в сутки")
     if not (ai_autopilot_account_daily.strip().isdigit() and 1 <= int(ai_autopilot_account_daily) <= 500):
