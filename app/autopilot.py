@@ -91,7 +91,7 @@ def typing_seconds(reply: str, rng=random) -> float:
 
 def next_work_time(acc: dict, now: datetime | None = None, rng=random) -> datetime:
     """Ближайшее начало рабочего дня аккаунта (+ несколько минут, как человек пришёл на работу)."""
-    now = now or db.now_local()
+    now = (now or db.now_utc()).astimezone(db.account_tz(acc))
     start = now.replace(hour=acc["work_start"].hour, minute=acc["work_start"].minute, second=0, microsecond=0)
     if start <= now:
         start += timedelta(days=1)

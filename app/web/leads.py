@@ -68,6 +68,18 @@ async def toggle_optout(request: Request, lid: int):
     return back(local_url(request.headers.get("referer"), "/leads"))
 
 
+@router.post("/{lid}/purge")
+async def purge_lead(request: Request, lid: int, confirm: str = Form(""), keep_stoplist: str = Form("")):
+    """Полное удаление человека по его просьбе (только админ)."""
+    if not auth.is_admin(user(request)):
+        return back("/leads", err="Удалить человека полностью может только админ")
+    if confirm.strip().lower() != "удалить":
+        return back(local_url(request.headers.get("referer"), "/leads"), err="Для полного удаления введите «удалить»")
+    if not leads.purge(lid, bool(keep_stoplist)):
+        return back("/leads", err="Лид не найден")
+    return back("/leads", msg="Человек удалён полностью" + (". Telegram ID оставлен в стоп-листе — ему больше не напишут" if keep_stoplist else ""))
+
+
 @router.post("/delete")
 async def delete_leads(request: Request, tag: str = Form(""), confirm: str = Form("")):
     if not auth.is_admin(user(request)):

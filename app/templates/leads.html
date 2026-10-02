@@ -54,7 +54,14 @@
   <td><small>{{ l.tags|join(', ') }}</small></td>
   <td><small>{{ l.owner_label or l.owner_first or '—' }}</small></td>
   <td><small>{% if l.last_out %}писали {{ l.last_out|dt }}{% endif %}{% if l.last_in %}<br>ответ {{ l.last_in|dt }}{% endif %}</small></td>
-  <td class="row-actions"><form method="post" action="/leads/{{ l.id }}/optout"><button class="outline secondary">{{ 'вернуть' if l.opted_out_at else 'исключить' }}</button></form></td>
+  <td class="row-actions"><form method="post" action="/leads/{{ l.id }}/optout"><button class="outline secondary">{{ 'вернуть' if l.opted_out_at else 'исключить' }}</button></form>
+    {% if is_admin %}<details style="display:inline-block"><summary class="muted" style="font-size:.8em">удалить полностью</summary>
+      <form method="post" action="/leads/{{ l.id }}/purge" style="min-width:220px">
+        <small class="muted">Переписка, кампании, сегменты, черновики ИИ — всё о человеке. Отменить нельзя.</small>
+        <label style="font-size:.85em"><input type="checkbox" name="keep_stoplist" value="1" checked> оставить Telegram ID в стоп-листе</label>
+        <input name="confirm" placeholder="введите «удалить»" required style="margin:.2rem 0">
+        <button class="secondary" style="width:auto">Удалить</button>
+      </form></details>{% endif %}</td>
 </tr>
 {% endfor %}
 </tbody></table>

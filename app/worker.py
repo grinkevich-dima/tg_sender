@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timedelta
 from telethon import errors
 
 from . import autopilot, campaigns, db, inbox
+from . import leads as leads_mod
 from .tg import AccountClient, tgm
 
 state: dict[int, dict] = {}                 # account_id → {"status", "next_send_at"}
@@ -65,15 +66,17 @@ def warmup_day(acc: dict) -> int:
 
 
 def sent_today(account_id: int) -> int:
-    """Сообщения кампаний за сегодня (первые и дожимы) — то, что расходует дневной лимит. Ответы из инбокса не считаются."""
-    start = datetime.combine(db.today(), time.min, tzinfo=db.now_local().tzinfo)
+    """Сообщения кампаний за сегодня (первые и дожимы) — то, что расходует дневной лимит. Ответы из инбокса не считаются.
+    «Сегодня» — по часовому поясу аккаунта."""
+    tz = db.account_tz(account(account_id))
+    start = datetime.combine(datetime.now(tz).date(), time.min, tzinfo=tz)
     return db.val("""SELECT COUNT(*) FROM messages WHERE account_id=%s AND direction='out' AND source='campaign'
                      AND created_at >= %s AND created_at < %s""",
                   (account_id, start, start + timedelta(days=1))) or 0
 
 
 def in_work_hours(acc: dict, now: datetime | None = None) -> bool:
-    now = now or db.now_local()
+    now = (now or db.now_utc()).astimezone(db.account_tz(acc))
     a, b, t = acc["work_start"], acc["work_end"], now.time()
     return a <= t < b if a <= b else (t >= a or t < b)
 
@@ -92,6 +95,17 @@ def recover_interrupted():
         db.log(f"Найдено прерванных отправок: {n} — помечены ошибкой", "warn")
 
 
+def cleanup() -> None:
+    """Раз в сутки: журнал старше log_keep_days, отработанные задания автоответа и старые черновики ИИ."""
+    days = db.get_setting("log_keep_days")
+    days = int(days) if days.isdigit() and int(days) > 0 else 90
+    n = db.changed("DELETE FROM event_log WHERE ts < now() - make_interval(days => %s)", (days,))
+    db.ex("DELETE FROM ai_reply_jobs WHERE status NOT IN ('pending','sending') AND created_at < now() - make_interval(days => %s)", (days,))
+    db.ex("DELETE FROM ai_drafts WHERE created_at < now() - make_interval(days => %s)", (days,))
+    if n:
+        db.log(f"Чистка: удалено записей журнала старше {days} дн. — {n}")
+
+
 def finish_campaigns():
     for c in db.q("""SELECT id, name FROM campaigns c WHERE status='running' AND NOT EXISTS
                      (SELECT 1 FROM campaign_leads cl WHERE cl.campaign_id=c.id
@@ -104,8 +118,12 @@ async def run():
     """Следит, чтобы у каждого подключённого аккаунта работал свой цикл отправки."""
     recover_interrupted()
     autopilot.recover_interrupted()
+    last_cleanup = datetime.min
     while True:
         try:
+            if datetime.now() - last_cleanup > timedelta(days=1):
+                last_cleanup = datetime.now()
+                cleanup()
             await autopilot.process_due()
             for aid, acc in list(tgm.accounts.items()):
                 if acc.authorized and (aid not in _tasks or _tasks[aid].done()):
@@ -258,7 +276,7 @@ async def send_item(item: dict) -> str:
     if not db.changed("UPDATE campaign_leads SET state='sending' WHERE id=%s AND state=%s", (cl_id, prev)):
         return "busy"
     lead = db.one("SELECT * FROM leads WHERE id=%s", (item["lead_id"],))
-    if lead["opted_out_at"]:
+    if lead["opted_out_at"] or leads_mod.in_stoplist(lead["tg_id"]):
         _fail(cl_id, "лид отписался", "skipped")
         return "skipped"
     if lead["owner_account_id"] and lead["owner_account_id"] != account_id:
@@ -280,7 +298,7 @@ async def send_item(item: dict) -> str:
             if uid and uid != lead["tg_id"]:
                 # адресат был указан только username/телефоном: запоминаем id, чтобы ловить прочтения/ответы/отписку
                 twin = db.one("SELECT id, opted_out_at FROM leads WHERE tg_id=%s AND id!=%s", (uid, lead["id"]))
-                if twin and twin["opted_out_at"]:
+                if (twin and twin["opted_out_at"]) or leads_mod.in_stoplist(uid):
                     _fail(cl_id, "лид отписался", "skipped")
                     return "skipped"
                 if not twin:
@@ -447,5 +465,5 @@ async def send_reply(lead_id: int, text: str, user_id: int) -> str:
     except (ValueError, errors.RPCError) as e:
         return f"Не отправлено: {e}"
     inbox.record(acc["id"], lead_id, "out", text, sent.id, "inbox", sender_user_id=user_id)
-    db.ex("UPDATE leads SET inbox_read_at=now() WHERE id=%s", (lead_id,))
+    inbox.mark_read(lead_id)
     return ""

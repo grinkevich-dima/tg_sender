@@ -62,7 +62,9 @@
 | `funnel_stages` | этапы воронки: порядок, цель, отказ, `auto` (`contacted` / `replied` — ставятся сами) |
 | `tg_dialogs` | снимок диалогов аккаунта: поиск чатов по названию, «есть ли переписка», группы для сегментов (`is_admin`, `members`, `username` для ссылки t.me, `last_message_id` для ссылки в приложение) |
 | `settings` | правила команды: стоп-слова, `recontact_days` |
-| `event_log` | журнал |
+| `event_log` | журнал (хранится `log_keep_days`, чистка `worker.cleanup()` раз в сутки) |
+| `do_not_contact` | стоп-лист Telegram ID после полного удаления человека |
+| `login_failures` | неудачные попытки входа (защита от перебора) |
 
 ## Отправка (`worker`)
 

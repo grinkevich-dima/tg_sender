@@ -10,6 +10,9 @@
 <label>Не больше автоответов одному человеку за сутки<input type="number" name="ai_autopilot_daily" value="{{ autopilot_daily }}" min="1" max="50"></label>
 <small class="muted">Дальше ИИ передаёт диалог человеку.</small>
 <hr>
+<label>Хранить журнал событий, дней<input type="number" name="log_keep_days" value="{{ log_keep_days }}" min="7" max="3650"></label>
+<small class="muted">Старые записи журнала, отработанные автоответы и черновики ИИ удаляются раз в сутки.</small>
+<hr>
 <label style="margin-top:1rem">Не писать одному человеку чаще раза в, дней<input type="number" name="recontact_days" value="{{ recontact_days }}" min="0" max="3650"></label>
 <small class="muted">Касается личных сообщений из разных кампаний: если лиду уже писали за этот срок, при постановке в очередь он будет пропущен с объяснением. Чатов не касается.</small>
 </article>

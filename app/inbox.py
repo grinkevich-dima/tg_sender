@@ -1,4 +1,6 @@
 """Инбокс и воронка: переписка с лидами, этапы, автоматическая смена этапа."""
+import time
+
 from . import db
 
 
@@ -35,6 +37,8 @@ def record(account_id: int, lead_id: int, direction: str, text: str | None, tg_m
         conflict = """DO UPDATE SET source=excluded.source, step=COALESCE(excluded.step, messages.step),
                       campaign_lead_id=COALESCE(excluded.campaign_lead_id, messages.campaign_lead_id),
                       sender_user_id=COALESCE(excluded.sender_user_id, messages.sender_user_id)"""
+    if direction == "in":
+        invalidate_unread()
     return db.val(f"""INSERT INTO messages(account_id, lead_id, campaign_lead_id, direction, tg_message_id, text,
                                            source, sender_user_id, step)
                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
@@ -44,8 +48,31 @@ def record(account_id: int, lead_id: int, direction: str, text: str | None, tg_m
                    step)) is True
 
 
+_unread_cache: dict[tuple, tuple[float, int]] = {}
+UNREAD_TTL = 15          # сек: счётчик в меню считается на каждой странице — кэшируем, сбрасывая при изменениях
+
+
+def invalidate_unread() -> None:
+    _unread_cache.clear()
+
+
+def mark_read(lead_id: int) -> None:
+    db.ex("UPDATE leads SET inbox_read_at=now() WHERE id=%s", (lead_id,))
+    invalidate_unread()
+
+
 def unread_count(account_ids: list[int] | None) -> int:
-    """Сколько диалогов с непрочитанными ответами (None — все аккаунты)."""
+    """Сколько диалогов с непрочитанными ответами (None — все аккаунты). Кэш на несколько секунд."""
+    key = tuple(sorted(account_ids)) if account_ids is not None else None
+    hit = _unread_cache.get(key)
+    if hit and time.monotonic() - hit[0] < UNREAD_TTL:
+        return hit[1]
+    n = _unread_count(account_ids)
+    _unread_cache[key] = (time.monotonic(), n)
+    return n
+
+
+def _unread_count(account_ids: list[int] | None) -> int:
     acc = "" if account_ids is None else "AND l.owner_account_id = ANY(%s)"
     params = [] if account_ids is None else [account_ids]
     return db.val(f"""SELECT COUNT(*) FROM leads l WHERE EXISTS (SELECT 1 FROM messages m WHERE m.lead_id=l.id

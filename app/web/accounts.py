@@ -214,6 +214,14 @@ def validate_settings(form) -> tuple[dict, str]:
     except ValueError:
         return {}, "Дата начала прогрева: формат ГГГГ-ММ-ДД"
     vals["warmup_enabled"] = bool(form.get("warmup_enabled"))
+    tz = str(form.get("tz", "")).strip()
+    if tz:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(tz)
+        except (ZoneInfoNotFoundError, ValueError):
+            return {}, "Часовой пояс: например Europe/Minsk, Europe/Moscow, Asia/Almaty"
+    vals["tz"] = tz or None
     vals["label"] = str(form.get("label", "")).strip()[:60]
     return vals, ""
 

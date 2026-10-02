@@ -72,6 +72,8 @@ def upsert_lead(data: dict, tags: list[str] | None = None, extra: dict | None = 
         cols[k] = cols.get(k) or ""
     lid = db.ex(f"INSERT INTO leads({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))}) RETURNING id",
                 tuple(cols.values()))
+    if in_stoplist(cols.get("tg_id")):     # человек просил удалить его данные — снова не пишем
+        db.ex("UPDATE leads SET opted_out_at=now(), opt_out_reason='в стоп-листе после удаления данных' WHERE id=%s", (lid,))
     return lid, True
 
 
@@ -150,6 +152,28 @@ def opt_out(lead_id: int, reason: str) -> None:
              WHERE lead_id=%s AND state IN ('new', 'queued')""", (lead_id,))
     db.ex("""UPDATE campaign_leads SET next_step_at=NULL, chain_note='дожимы остановлены: отписался'
              WHERE lead_id=%s AND next_step_at IS NOT NULL""", (lead_id,))
+
+
+def purge(lead_id: int, keep_in_stoplist: bool = True) -> bool:
+    """Удалить о человеке всё: лида, переписку, участие в кампаниях и сегментах, черновики и задания ИИ,
+    примеры с его словами, снимок диалога. В стоп-листе по желанию остаётся только Telegram ID."""
+    lead = db.one("SELECT id, tg_id FROM leads WHERE id=%s", (lead_id,))
+    if not lead:
+        return False
+    with db.tx():
+        db.ex("DELETE FROM ai_examples WHERE lead_id=%s", (lead_id,))
+        db.ex("DELETE FROM ai_reply_jobs WHERE lead_id=%s", (lead_id,))
+        if lead["tg_id"]:
+            db.ex("DELETE FROM tg_dialogs WHERE peer_id=%s", (lead["tg_id"],))
+            if keep_in_stoplist:
+                db.ex("INSERT INTO do_not_contact(tg_id) VALUES (%s) ON CONFLICT DO NOTHING", (lead["tg_id"],))
+        db.ex("DELETE FROM leads WHERE id=%s", (lead_id,))     # каскадом: переписка, кампании, сегменты, черновики
+    db.log(f"Лид #{lead_id} удалён полностью по запросу" + (" (Telegram ID оставлен в стоп-листе)" if keep_in_stoplist else ""), "warn")
+    return True
+
+
+def in_stoplist(tg_id: int | None) -> bool:
+    return bool(tg_id) and bool(db.one("SELECT 1 FROM do_not_contact WHERE tg_id=%s", (tg_id,)))
 
 
 def opt_in(lead_id: int) -> None:

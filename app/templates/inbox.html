@@ -109,6 +109,12 @@
         <button class="outline secondary" style="width:auto">Отписать</button>
       </form>
       {% endif %}
+      {% if is_admin %}<details style="margin-top:.6rem"><summary class="muted">Удалить всё о человеке (по его просьбе)</summary>
+        <form method="post" action="/leads/{{ lead.id }}/purge">
+          <small class="muted">Удалятся переписка, участие в кампаниях и сегментах, черновики и примеры ИИ с его словами. Отменить нельзя.</small>
+          <label><input type="checkbox" name="keep_stoplist" value="1" checked> оставить Telegram ID в стоп-листе, чтобы ему больше не писали</label>
+          <div class="grid"><input name="confirm" placeholder="введите «удалить»" required><button class="secondary">Удалить полностью</button></div>
+        </form></details>{% endif %}
     </article>
   {% else %}
     <p class="muted">Выберите диалог слева.</p>

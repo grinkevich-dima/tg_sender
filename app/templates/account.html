@@ -28,6 +28,10 @@
   <label>Рабочие часы с<input type="time" name="work_start" value="{{ acc.work_start.strftime('%H:%M') }}"></label>
   <label>по<input type="time" name="work_end" value="{{ acc.work_end.strftime('%H:%M') }}"></label>
 </div>
+<label>Часовой пояс аккаунта <small class="muted">— пусто: общий для панели</small>
+  <input name="tz" value="{{ acc.tz or '' }}" list="tz-list" placeholder="Europe/Minsk">
+  <datalist id="tz-list">{% for z in ['Europe/Minsk','Europe/Moscow','Europe/Kyiv','Europe/Warsaw','Europe/Vilnius','Europe/Riga','Asia/Almaty','Asia/Tashkent','Asia/Tbilisi','Asia/Yerevan','Asia/Dubai','UTC'] %}<option value="{{ z }}">{% endfor %}</datalist></label>
+<small class="muted">По нему считаются рабочие часы и граница суток для дневного лимита.</small>
 </article>
 {% if paused %}
 <article><header><strong>⚠ Ограничение Telegram до {{ paused|dt }}</strong> <small class="muted">({{ acc.pause_reason }})</small></header>

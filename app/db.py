@@ -161,6 +161,18 @@ def now_local() -> datetime:
     return datetime.now(TZ)
 
 
+def account_tz(acc: dict | None):
+    """Часовой пояс аккаунта (рабочие часы, граница суток) или общий TZ_NAME."""
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    name = (acc or {}).get("tz")
+    if name:
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            pass
+    return TZ
+
+
 def today():
     return now_local().date()
 

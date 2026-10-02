@@ -95,7 +95,7 @@ async def dialog_page(request: Request, lead_id: int):
     lead = _lead(request, lead_id)
     if not lead:
         return back("/inbox", err="Диалог не найден")
-    db.ex("UPDATE leads SET inbox_read_at=now() WHERE id=%s", (lead_id,))
+    inbox.mark_read(lead_id)
     msgs = db.q("""SELECT m.*, u.name AS sender_name, c.name AS campaign_name, c.id AS campaign_id
                    FROM messages m LEFT JOIN users u ON u.id=m.sender_user_id
                    LEFT JOIN campaign_leads cl ON cl.id=m.campaign_lead_id LEFT JOIN campaigns c ON c.id=cl.campaign_id
@@ -126,7 +126,7 @@ async def dialog_new_messages(request: Request, lead_id: int, after: int = 0):
     rows = db.q("""SELECT id, direction, text, source, created_at FROM messages WHERE lead_id=%s AND id > %s
                    ORDER BY created_at, id""", (lead_id, after))
     if any(r["direction"] == "in" for r in rows):
-        db.ex("UPDATE leads SET inbox_read_at=now() WHERE id=%s", (lead_id,))
+        inbox.mark_read(lead_id)
     return {"messages": [{**r, "created_at": r["created_at"].astimezone(db.now_local().tzinfo).strftime("%d.%m %H:%M")}
                          for r in rows]}
 
