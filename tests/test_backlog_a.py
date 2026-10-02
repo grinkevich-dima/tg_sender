@@ -2,7 +2,7 @@
 import asyncio
 import types
 
-from app import ai, db, inbox, tasks
+from app import ai, autopilot, db, inbox, tasks
 from app.tg import tgm
 from tests.conftest import URL, run
 from tests import test_autopilot as ta
@@ -12,9 +12,11 @@ fake = ta.fake          # фикстура «поддельный ИИ» из т
 
 
 def test_a1_message_during_typing_gets_its_own_reply(request, monkeypatch):
+    """Перезапуски исчерпаны (E1) — ответ уходит, а на дописанное планируется следующий."""
     request.getfixturevalue("fake")
     u, a, lid = setup()
     incoming(a, "Сколько стоит лендинг?", 10)
+    db.ex("UPDATE ai_reply_jobs SET restarts=%s", (autopilot.MAX_RESTARTS,))
     real = ai.chat
 
     async def chat_with_interrupt(messages, **kw):

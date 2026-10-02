@@ -32,7 +32,7 @@ def test_d1_skip_before_send_sends_nothing():
 
     with pytest.raises(delivery.Skip):
         run(delivery.deliver(tgm.get(a), lead, "привет", typing=0.001, check_before_send=stop))
-    assert client.sent == [] and client.actions == [(42, "typing")]
+    assert client.sent == [] and not getattr(client, "actions", [])     # проверка — ещё до «печатает…»
 
 
 def test_d1_inbox_reply_respects_stoplist():

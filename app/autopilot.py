@@ -1,9 +1,12 @@
 """Автопилот: ИИ сам отвечает людям из кампаний, где это включено.
 
 Человеческий ритм: заметил (1–10 мин) → прочитал (по длине) → подумал (по сложности) → «печатает…» (по длине ответа).
-Новые сообщения клиента до ответа переносят ответ — ИИ отвечает один раз на всё.
+Новые сообщения клиента до ответа переносят ответ, а дописанное во время «печатает…» — выбрасывает черновик:
+ИИ отвечает один раз на всё. Ждём, пока клиент замолчит, но не дольше WAIT_MAX от первого сообщения и не больше
+MAX_RESTARTS перезапусков — так «пишущий по слову» клиент всё равно получит ответ.
 Зовёт человека (и не отвечает), если: отказ / «не пишите», ИИ сам не может ответить по базе знаний,
-исчерпан дневной лимит автоответов человеку, менеджер вмешался в диалог.
+исчерпан дневной лимит автоответов (человеку или аккаунту), менеджер вмешался в диалог, уже ждёт человека,
+сообщение пришло давно (панель была выключена), ИИ или Telegram не дают ответить дольше часа.
 """
 import asyncio
 import random
@@ -11,6 +14,7 @@ import re
 from datetime import datetime, timedelta
 
 from . import ai, db, inbox
+from . import leads as leads_mod
 from .tasks import spawn
 
 NOTICE = (60, 600)                  # «заметил сообщение», сек
@@ -21,6 +25,11 @@ TYPE_CPS = (3.0, 5.0)               # скорость набора, симво�
 TYPE_MAX = 90                       # «печатает…» не дольше, сек
 TOTAL_MAX = 15 * 60                 # пауза до ответа не больше 15 минут
 JITTER = 0.25
+WAIT_MAX = 20 * 60                  # клиент пишет и пишет: ответ откладываем не дольше, чем на столько от первого сообщения
+MAX_RESTARTS = 2                    # сколько раз выбрасываем черновик из-за дописанного; дальше — отправляем
+AI_RETRY = (60, 180, 300)           # ИИ недоступен: повторы через столько секунд, потом — человеку
+FAIL_MAX = timedelta(hours=1)       # Telegram не даёт отправить дольше часа — человеку
+STALE = timedelta(hours=6)          # сообщение старше (панель была выключена) — не автоответ, а человеку
 HANDOFF_LABELS = {"stop": "просит не писать", "refusal": "отказ"}
 MANUAL_CHECK_AFTER = 5              # через сколько секунд решаем, что своё сообщение написано руками в Telegram
 AUTOPILOT_RULE = (
@@ -133,8 +142,9 @@ def schedule(lead: dict, account_id: int, campaign: dict, text: str, label: str 
     """Поставить или перенести автоответ. Возвращает id задания."""
     now = db.now_utc()
     job = db.one("SELECT * FROM ai_reply_jobs WHERE lead_id=%s AND status='pending'", (lead["id"],))
-    if job:      # клиент дописал — ответим на всё сразу, когда «дочитаем» новое
+    if job:      # клиент дописал — ответим на всё сразу, когда «дочитаем» новое, но не позже предела ожидания
         due = max(job["due_at"], now + timedelta(seconds=reply_delay(text, label, notice=False)))
+        due = min(due, max(job["due_at"], job["created_at"] + timedelta(seconds=WAIT_MAX)))
         db.ex("UPDATE ai_reply_jobs SET due_at=%s WHERE id=%s", (due, job["id"]))
         return job["id"]
     due = now + timedelta(seconds=reply_delay(text, label))
@@ -143,19 +153,29 @@ def schedule(lead: dict, account_id: int, campaign: dict, text: str, label: str 
                  (lead["id"], account_id, campaign["id"], campaign["ai_profile_id"], due))
 
 
-async def after_incoming(message_id: int, lead_id: int, account_id: int) -> None:
+async def after_incoming(message_id: int, lead_id: int, account_id: int, sent_at: datetime | None = None) -> None:
     """После входящего: разбор ИИ, затем — запланировать автоответ или позвать человека."""
     label = await ai.classify_message(message_id)
+    lead = db.one("SELECT * FROM leads WHERE id=%s", (lead_id,))
+    if label == "stop" and lead and not lead["opted_out_at"]:
+        # «не пишите мне» своими словами — отписка на всю команду, как стоп-слово (вернуть можно в «Лидах»)
+        leads_mod.opt_out(lead_id, "ИИ: просит не писать")
+        db.log(f"Лид #{lead_id} отписан: ИИ распознал просьбу не писать", "warn", account_id)
     if not enabled():
         return
-    lead = db.one("SELECT * FROM leads WHERE id=%s", (lead_id,))
     camp = campaign_for_lead(lead_id)
-    if not (lead and camp and camp["ai_autoreply"]) or lead["ai_paused"] or lead["opted_out_at"]:
+    if not (lead and camp and camp["ai_autoreply"]) or lead["ai_paused"]:
         return
     if lead["owner_account_id"] != account_id:
         return
     if label in HANDOFF_LABELS:
         handoff(lead_id, HANDOFF_LABELS[label], account_id)
+        return
+    if lead["opted_out_at"] or lead["ai_handoff"]:
+        return          # отписан или уже ждёт человека — ИИ в этот диалог не вмешивается
+    if sent_at and db.now_utc() - sent_at > STALE:
+        hours = int((db.now_utc() - sent_at).total_seconds() // 3600)
+        handoff(lead_id, f"сообщение пришло {hours} ч назад, пока панель не работала — ответьте сами", account_id)
         return
     text = db.val("SELECT text FROM messages WHERE id=%s", (message_id,)) or ""
     schedule(lead, account_id, camp, text, label)
@@ -175,6 +195,23 @@ def recover_interrupted() -> None:
 def _sent_today(lead_id: int) -> int:
     return db.val("""SELECT COUNT(*) FROM messages WHERE lead_id=%s AND source='ai'
                      AND created_at > now() - interval '24 hours'""", (lead_id,)) or 0
+
+
+def _account_sent_today(account_id: int) -> int:
+    return db.val("""SELECT COUNT(*) FROM messages WHERE account_id=%s AND source='ai'
+                     AND created_at > now() - interval '24 hours'""", (account_id,)) or 0
+
+
+def _retry_later(job: dict, until: datetime, reason: str) -> str:
+    """Telegram не даёт ответить (сеть, ограничение, аккаунт не подключён): повторим позже,
+    но если не получается дольше FAIL_MAX — человеку, чтобы клиент не ждал часами."""
+    since = job.get("fail_since") or db.now_utc()
+    if until - since > FAIL_MAX:
+        handoff(job["lead_id"], f"автоответ не ушёл за час: {reason}"[:200], job["account_id"])
+        return "handoff"
+    db.ex("UPDATE ai_reply_jobs SET status='pending', due_at=%s, fail_since=%s, reason=%s WHERE id=%s",
+          (until, since, reason[:200], job["id"]))
+    return "postponed"
 
 
 def _finish(job_id: int, status: str, reason: str | None = None, text: str | None = None) -> None:
@@ -224,15 +261,19 @@ async def _send_job(job: dict) -> str:
     client = tgm.get(acc_id)
     pu = paused_until(acc) if acc else None
     if not acc or not client.authorized or acc["status"] != "active" or tgm.preparing_account(acc_id) or pu:
-        later = pu if pu else db.now_utc() + timedelta(minutes=5)
-        db.ex("UPDATE ai_reply_jobs SET status='pending', due_at=%s WHERE id=%s", (later, jid))
-        return "postponed"
-    if not in_work_hours(acc):
-        db.ex("UPDATE ai_reply_jobs SET status='pending', due_at=%s WHERE id=%s", (next_work_time(acc), jid))
+        if pu:
+            return _retry_later(job, pu, f"аккаунт на паузе ({acc['pause_reason'] or 'ограничение Telegram'})")
+        return _retry_later(job, db.now_utc() + timedelta(minutes=5), "аккаунт не подключён или занят")
+    if not in_work_hours(acc):     # ночь — не сбой: отсчёт «не удаётся отправить» начинаем заново утром
+        db.ex("UPDATE ai_reply_jobs SET status='pending', due_at=%s, fail_since=NULL WHERE id=%s", (next_work_time(acc), jid))
         return "postponed"
     cap = int(db.get_setting("ai_autopilot_daily") or 5)
     if _sent_today(lead_id) >= cap:
         handoff(lead_id, f"лимит автоответов ({cap} в сутки)", acc_id)
+        return "handoff"
+    acc_cap = int(db.get_setting("ai_autopilot_account_daily") or 50)
+    if _account_sent_today(acc_id) >= acc_cap:
+        handoff(lead_id, f"лимит автоответов аккаунта ({acc_cap} в сутки)", acc_id)
         return "handoff"
 
     started = db.now_utc()          # всё, что клиент пришлёт после этого момента, войдёт в следующий ответ (A1)
@@ -241,6 +282,11 @@ async def _send_job(job: dict) -> str:
     try:
         text = (await ai.chat(msgs)).strip()
     except ai.AIError as e:
+        attempt = (job.get("ai_attempts") or 0) + 1
+        if attempt <= len(AI_RETRY):        # перегрузка и таймауты обычно проходят за минуту-другую
+            db.ex("""UPDATE ai_reply_jobs SET status='pending', due_at=%s, ai_attempts=%s, reason=%s WHERE id=%s""",
+                  (db.now_utc() + timedelta(seconds=AI_RETRY[attempt - 1]), attempt, f"ИИ: {e}"[:200], jid))
+            return "retry"
         handoff(lead_id, f"ИИ недоступен: {e}"[:200], acc_id)
         from . import notify
         notify.admin(f"🤖 ИИ недоступен — автоответы передаются людям: {e}"[:400], key="ai-down")
@@ -256,15 +302,29 @@ async def _send_job(job: dict) -> str:
     if problem:
         handoff(lead_id, f"ответ ИИ не отправлен — {problem}", acc_id)
         return "handoff"
-    def manager_answered():
-        # пока «печатали», менеджер мог ответить сам
+    can_restart = (job.get("restarts") or 0) < MAX_RESTARTS and \
+        db.now_utc() - job["created_at"] < timedelta(seconds=WAIT_MAX)
+
+    def still_ok():
+        # пока сочиняли и «печатали»: менеджер мог ответить сам, клиент — дописать
         if db.one("""SELECT 1 FROM messages WHERE lead_id=%s AND direction='out' AND source IN ('inbox','telegram')
                      AND created_at > %s""", (lead_id, job["created_at"])):
             raise Skip("менеджер ответил сам")
+        if can_restart and db.one("""SELECT 1 FROM messages WHERE lead_id=%s AND direction='in' AND created_at > %s""",
+                                  (lead_id, started)):
+            raise Skip("клиент дописал")
     try:
         # «печатает…» столько, сколько набирал бы человек
-        sent = await deliver(client, lead, text, typing=typing_seconds(text), check_before_send=manager_answered)
-    except Skip:
+        sent = await deliver(client, lead, text, typing=typing_seconds(text), check_before_send=still_ok)
+    except Skip as s:
+        if s.reason == "клиент дописал":
+            # черновик выбрасываем: ответим на всё сразу, когда «дочитаем» новое
+            newer = db.val("""SELECT text FROM messages WHERE lead_id=%s AND direction='in'
+                              ORDER BY created_at DESC, id DESC LIMIT 1""", (lead_id,)) or ""
+            due = db.now_utc() + timedelta(seconds=reply_delay(newer, None, notice=False))
+            db.ex("""UPDATE ai_reply_jobs SET status='pending', due_at=%s, restarts=restarts+1,
+                     reason='клиент дописал — ответ переписывается' WHERE id=%s""", (due, jid))
+            return "restarted"
         manager_intervened(lead_id, "сам")
         return "cancelled"
     except Exception as e:
@@ -272,9 +332,10 @@ async def _send_job(job: dict) -> str:
         if kind in ("flood", "transient"):
             if kind == "flood":
                 flood_pause(acc_id, e)
-            later = db.now_utc() + timedelta(minutes=10 if kind == "flood" else 2)
-            db.ex("UPDATE ai_reply_jobs SET status='pending', due_at=%s WHERE id=%s", (later, jid))
-            return "postponed"
+                acc = account(acc_id)
+                return _retry_later(job, max(acc["paused_until"] or db.now_utc(), db.now_utc() + timedelta(minutes=10)),
+                                    f"ограничение Telegram ({acc['pause_reason']})")
+            return _retry_later(job, db.now_utc() + timedelta(minutes=2), "нет связи с Telegram")
         _finish(jid, "failed", describe(e)[:300])
         handoff(lead_id, f"не удалось отправить автоответ: {type(e).__name__}", acc_id)
         return "failed"
@@ -284,7 +345,7 @@ async def _send_job(job: dict) -> str:
         db.ex("UPDATE leads SET ai_handoff=%s, ai_handoff_at=now() WHERE id=%s",
               ("ИИ пообещал уточнить — нужен ответ человека", lead_id))
         return "sent"
-    # клиент дописал, пока ИИ писал и «печатал»: это не вошло в ответ — планируем следующий
+    # клиент дописал, а перезапуски исчерпаны: это не вошло в ответ — планируем следующий
     newer = db.one("""SELECT text FROM messages WHERE lead_id=%s AND direction='in' AND created_at > %s
                       ORDER BY created_at DESC, id DESC LIMIT 1""", (lead_id, started))
     if newer:

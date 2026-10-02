@@ -57,13 +57,15 @@ async def settings_page(request: Request):
     return page(request, "settings.html", stop_words=db.get_setting("stop_words"),
                 recontact_days=recontact_days(), stages=inbox.funnel(),
                 autopilot=db.get_setting("ai_autopilot") == "1", autopilot_daily=db.get_setting("ai_autopilot_daily"),
+                autopilot_account_daily=db.get_setting("ai_autopilot_account_daily"),
                 log_keep_days=db.get_setting("log_keep_days"), notify_account=db.get_setting("notify_account_id"),
                 accounts=[a for a in auth.user_accounts(user(request), only_active=True) if tgm.get(a["id"]).authorized])
 
 
 @router.post("/settings")
 async def settings_save(request: Request, stop_words: str = Form(""), recontact_days: str = Form("30"),
-                        ai_autopilot: str = Form(""), ai_autopilot_daily: str = Form("5"), log_keep_days: str = Form("90")):
+                        ai_autopilot: str = Form(""), ai_autopilot_daily: str = Form("5"),
+                        ai_autopilot_account_daily: str = Form("50"), log_keep_days: str = Form("90")):
     if not auth.is_admin(user(request)):
         return back("/", err="Только админ")
     if not (recontact_days.strip().isdigit() and int(recontact_days) <= 3650):
@@ -75,10 +77,13 @@ async def settings_save(request: Request, stop_words: str = Form(""), recontact_
     db.set_setting("recontact_days", str(int(recontact_days)))
     if not (ai_autopilot_daily.strip().isdigit() and 1 <= int(ai_autopilot_daily) <= 50):
         return back("/settings", err="Лимит автоответов — от 1 до 50 в сутки")
+    if not (ai_autopilot_account_daily.strip().isdigit() and 1 <= int(ai_autopilot_account_daily) <= 500):
+        return back("/settings", err="Лимит автоответов аккаунта — от 1 до 500 в сутки")
     if (db.get_setting("ai_autopilot") == "1") != bool(ai_autopilot):
         db.log(f"Автоответы ИИ {'включены' if ai_autopilot else 'ВЫКЛЮЧЕНЫ'} для всей команды ({user(request)['login']})", "warn")
     db.set_setting("ai_autopilot", "1" if ai_autopilot else "0")
     db.set_setting("ai_autopilot_daily", str(int(ai_autopilot_daily)))
+    db.set_setting("ai_autopilot_account_daily", str(int(ai_autopilot_account_daily)))
     if not (log_keep_days.strip().isdigit() and 7 <= int(log_keep_days) <= 3650):
         return back("/settings", err="Срок хранения журнала — от 7 до 3650 дней")
     db.set_setting("log_keep_days", str(int(log_keep_days)))

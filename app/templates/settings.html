@@ -8,6 +8,7 @@
 <hr>
 <label><input type="checkbox" name="ai_autopilot" value="1" role="switch" {% if autopilot %}checked{% endif %}> <b>Автоответы ИИ разрешены</b> <small class="muted">— общий выключатель; сами автоответы включаются в каждой кампании</small></label>
 <label>Не больше автоответов одному человеку за сутки<input type="number" name="ai_autopilot_daily" value="{{ autopilot_daily }}" min="1" max="50"></label>
+<label>Не больше автоответов с одного аккаунта за сутки<input type="number" name="ai_autopilot_account_daily" value="{{ autopilot_account_daily }}" min="1" max="500"></label>
 <small class="muted">Дальше ИИ передаёт диалог человеку.</small>
 <hr>
 <label>Уведомления админу в Telegram — в «Избранное» аккаунта

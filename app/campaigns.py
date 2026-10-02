@@ -269,12 +269,31 @@ def reschedule(campaign_id: int) -> int:
     return n
 
 
+def last_out(lead_id: int, exclude_cl: int | None = None):
+    """Когда команда последний раз писала человеку (кроме сообщений этой строки кампании)."""
+    return db.val("""SELECT MAX(created_at) FROM messages WHERE lead_id=%s AND direction='out'
+                     AND campaign_lead_id IS DISTINCT FROM %s""", (lead_id, exclude_cl))
+
+
+def recontact_block(lead: dict, cl_id: int) -> str | None:
+    """Правило команды «не чаще раза в N дней» на момент отправки (очередь могла простоять дни). Чатов не касается."""
+    if lead["kind"] == "chat":
+        return None
+    days, last = recontact_days(), last_out(lead["id"], cl_id)
+    if last and (db.now_utc() - last).days < days:
+        return f"уже писали {last:%d.%m} (правило команды: не чаще раза в {days} дн.)"
+    return None
+
+
 def stop_reason(cl: dict, lead: dict) -> str | None:
-    """Почему дожимать нельзя: ответил, отписался, менеджер вручную поставил этап."""
+    """Почему дожимать нельзя: ответил, отписался, ему уже пишут помимо цепочки, менеджер вручную поставил этап."""
     if cl["state"] == "replied":
         return "ответил"
     if lead["opted_out_at"]:
         return "отписался"
+    if cl.get("sent_at") and db.one("""SELECT 1 FROM messages WHERE lead_id=%s AND direction='out' AND created_at > %s
+                                       AND campaign_lead_id IS DISTINCT FROM %s""", (lead["id"], cl["sent_at"], cl["id"])):
+        return "после рассылки ему писали отдельно (менеджер или другая кампания)"
     if lead.get("stage_id"):
         st = db.one("SELECT name, auto FROM funnel_stages WHERE id=%s", (lead["stage_id"],))
         if st and not st["auto"]:
@@ -386,6 +405,8 @@ def enqueue(campaign_id: int, f: dict) -> tuple[int, int]:
     w, p = filter_sql(campaign_id, f)
     rows = db.q(f"""SELECT cl.id, cl.lead_id, cl.dialog, cl.real_dialog, l.kind, l.tg_id, l.owner_account_id,
                            l.opted_out_at, a.label AS owner_label,
+                           (SELECT c2.name FROM campaign_leads cl2 JOIN campaigns c2 ON c2.id=cl2.campaign_id
+                              WHERE cl2.lead_id=l.id AND cl2.id != cl.id AND cl2.state IN ('queued','sending') LIMIT 1) AS other_queue,
                            (SELECT MAX(m.created_at) FROM messages m WHERE m.lead_id=l.id AND m.direction='out'
                               AND (cl.id IS DISTINCT FROM m.campaign_lead_id)) AS last_out
                     FROM {FROM_SQL} LEFT JOIN tg_accounts a ON a.id=l.owner_account_id
@@ -403,6 +424,8 @@ def enqueue(campaign_id: int, f: dict) -> tuple[int, int]:
             skip.append((r["id"], "отписался"))
         elif r["owner_account_id"] and r["owner_account_id"] not in acc_ids:
             skip.append((r["id"], f"закреплён за другим аккаунтом ({r['owner_label'] or r['owner_account_id']})"))
+        elif r["kind"] != "chat" and r["other_queue"]:
+            skip.append((r["id"], f"уже в очереди кампании «{r['other_queue']}»"))
         elif r["kind"] != "chat" and r["last_out"] and (now - r["last_out"]).days < days:
             skip.append((r["id"], f"уже писали {r['last_out']:%d.%m} (правило команды: не чаще раза в {days} дн.)"))
         else:

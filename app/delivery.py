@@ -31,6 +31,7 @@ RECIPIENT_ERRORS = (
 )
 # Сетевые сбои: сообщение возвращаем в очередь и пробуем позже, а не помечаем ошибкой
 TRANSIENT_ERRORS = (ConnectionError, OSError, asyncio.TimeoutError)
+TYPING_CHECK = 3          # сек: как часто во время «печатает…» проверяем, можно ли ещё отправлять
 INTERRUPTED = "прервано во время отправки — проверьте в Telegram, дошло ли сообщение"
 
 
@@ -113,11 +114,16 @@ async def deliver(client: AccountClient, lead: dict, text: str, *, topic_id: int
             check_resolved(entity)
         if not typing and not check_before_send:
             return await client.client.send_message(entity, text, reply_to=_reply_to(entity, topic_id), link_preview=True)
-    if typing:
-        async with client.client.action(entity, "typing"):
-            await asyncio.sleep(typing)
     if check_before_send:
         check_before_send()
+    if typing:
+        # «печатает…» гаснет сразу, как только проверка скажет «не отправлять» (клиент дописал, менеджер ответил)
+        async with client.client.action(entity, "typing"):
+            end = asyncio.get_running_loop().time() + typing
+            while (left := end - asyncio.get_running_loop().time()) > 0:
+                await asyncio.sleep(min(TYPING_CHECK, left))
+                if check_before_send:
+                    check_before_send()
     async with client.lock:
         return await client.client.send_message(entity, text, reply_to=_reply_to(entity, topic_id), link_preview=True)
 
@@ -141,6 +147,10 @@ async def send_item(item: dict) -> str:
         return "skipped"
     if lead["owner_account_id"] and lead["owner_account_id"] != account_id:
         _fail(cl_id, "лид закреплён за другим аккаунтом", "skipped")
+        return "skipped"
+    blocked = campaigns.recontact_block(lead, cl_id)
+    if blocked:
+        _fail(cl_id, blocked, "skipped")
         return "skipped"
     text = campaigns.text_for(item, lead)
     if not text:

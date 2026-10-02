@@ -193,7 +193,7 @@ class AccountClient(LoginMixin, GroupsMixin):
                 added += bool(self.handle_outgoing(peer_id, text, m.id))
             else:
                 before = db.val("SELECT COUNT(*) FROM messages WHERE account_id=%s AND direction='in'", (self.id,))
-                await self.handle_incoming(peer_id, text, m.id)
+                await self.handle_incoming(peer_id, text, m.id, date=getattr(m, "date", None))
                 added += (db.val("SELECT COUNT(*) FROM messages WHERE account_id=%s AND direction='in'", (self.id,)) or 0) - before
         if added:
             db.log(f"Догружено пропущенных сообщений: {added}", account_id=self.id)
@@ -237,7 +237,7 @@ class AccountClient(LoginMixin, GroupsMixin):
 
         @c.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
         async def on_incoming(event):
-            await self.handle_incoming(event.sender_id, event.raw_text, event.id, event)
+            await self.handle_incoming(event.sender_id, event.raw_text, event.id, event, date=event.date)
 
         @c.on(events.NewMessage(outgoing=True, func=lambda e: e.is_private))
         async def on_outgoing(event):
@@ -266,14 +266,14 @@ class AccountClient(LoginMixin, GroupsMixin):
                 spawn(autopilot.check_manual(self.id, lead["id"], tg_message_id), "проверка: менеджер написал сам")
         return new
 
-    async def handle_incoming(self, uid: int, text: str | None, tg_message_id: int | None, event=None):
+    async def handle_incoming(self, uid: int, text: str | None, tg_message_id: int | None, event=None, date=None):
         lead = db.one("SELECT * FROM leads WHERE tg_id=%s", (uid,))
         if lead:
             if inbox.record(self.id, lead["id"], "in", text, tg_message_id, "incoming") and ai.configured() and text:
                 mid = db.val("""SELECT id FROM messages WHERE account_id=%s AND lead_id=%s AND direction='in'
                                 AND tg_message_id=%s""", (self.id, lead["id"], tg_message_id))
                 # разбор ответа ИИ и автоответ (если включён в кампании) — в фоне, приём не ждёт
-                spawn(autopilot.after_incoming(mid, lead["id"], self.id), f"разбор и автоответ лиду #{lead['id']}")
+                spawn(autopilot.after_incoming(mid, lead["id"], self.id, sent_at=date), f"разбор и автоответ лиду #{lead['id']}")
             inbox.auto_stage(lead["id"], "replied")
             db.ex("""UPDATE campaign_leads SET state='replied', replied_at=now(), next_step_at=NULL,
                      chain_note=CASE WHEN next_step_at IS NOT NULL THEN 'дожимы остановлены: ответил' ELSE chain_note END
