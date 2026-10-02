@@ -34,6 +34,13 @@
     {% for p in ai_profiles %}<option value="{{ p.id }}" {% if p.id == c.ai_profile_id %}selected{% endif %}>{{ p.name }}</option>{% endfor %}
   </select> <a href="/ai" class="muted" style="font-size:.85em">настроить</a>
 </form>
+<form method="post" action="/campaigns/{{ c.id }}/autoreply" class="row-actions" style="margin:-.5rem 0 1rem">
+  <label style="display:inline-flex;gap:.4rem;align-items:center;margin:0">
+    <input type="checkbox" name="on" value="1" role="switch" {% if c.ai_autoreply %}checked{% endif %} onchange="this.form.submit()">
+    <b>🤖 ИИ отвечает сам</b> <small class="muted">людям из этой кампании — с человеческой задержкой; отказ, «не пишите», сложные вопросы и вмешательство менеджера передаются человеку</small>
+  </label>
+  {% if c.ai_autoreply and not c.ai_profile_id %}<br><small class="log-warn">Подключите ИИ-профиль: без него бот знает только общую инструкцию.</small>{% endif %}
+</form>
 
 <article>
 <header><strong>Цепочка</strong> <small class="muted">· дожимы уходят тем, кто не ответил; цепочка останавливается при ответе, отписке или этапе, поставленном вручную</small></header>

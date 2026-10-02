@@ -55,11 +55,13 @@ async def settings_page(request: Request):
     if not auth.is_admin(user(request)):
         return back("/", err="Общие настройки меняет админ. Лимиты своего аккаунта — в разделе «Аккаунты»")
     return page(request, "settings.html", stop_words=db.get_setting("stop_words"),
-                recontact_days=recontact_days(), stages=inbox.funnel())
+                recontact_days=recontact_days(), stages=inbox.funnel(),
+                autopilot=db.get_setting("ai_autopilot") == "1", autopilot_daily=db.get_setting("ai_autopilot_daily"))
 
 
 @router.post("/settings")
-async def settings_save(request: Request, stop_words: str = Form(""), recontact_days: str = Form("30")):
+async def settings_save(request: Request, stop_words: str = Form(""), recontact_days: str = Form("30"),
+                        ai_autopilot: str = Form(""), ai_autopilot_daily: str = Form("5")):
     if not auth.is_admin(user(request)):
         return back("/", err="Только админ")
     if not (recontact_days.strip().isdigit() and int(recontact_days) <= 3650):
@@ -69,6 +71,12 @@ async def settings_save(request: Request, stop_words: str = Form(""), recontact_
         return back("/settings", err="Нужно хотя бы одно стоп-слово — иначе отказ не сработает")
     db.set_setting("stop_words", words)
     db.set_setting("recontact_days", str(int(recontact_days)))
+    if not (ai_autopilot_daily.strip().isdigit() and 1 <= int(ai_autopilot_daily) <= 50):
+        return back("/settings", err="Лимит автоответов — от 1 до 50 в сутки")
+    if (db.get_setting("ai_autopilot") == "1") != bool(ai_autopilot):
+        db.log(f"Автоответы ИИ {'включены' if ai_autopilot else 'ВЫКЛЮЧЕНЫ'} для всей команды ({user(request)['login']})", "warn")
+    db.set_setting("ai_autopilot", "1" if ai_autopilot else "0")
+    db.set_setting("ai_autopilot_daily", str(int(ai_autopilot_daily)))
     return back("/settings", msg="Сохранено")
 
 

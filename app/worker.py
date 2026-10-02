@@ -9,7 +9,7 @@ from datetime import date, datetime, time, timedelta
 
 from telethon import errors
 
-from . import campaigns, db, inbox
+from . import autopilot, campaigns, db, inbox
 from .tg import AccountClient, tgm
 
 state: dict[int, dict] = {}                 # account_id → {"status", "next_send_at"}
@@ -103,8 +103,10 @@ def finish_campaigns():
 async def run():
     """Следит, чтобы у каждого подключённого аккаунта работал свой цикл отправки."""
     recover_interrupted()
+    autopilot.recover_interrupted()
     while True:
         try:
+            await autopilot.process_due()
             for aid, acc in list(tgm.accounts.items()):
                 if acc.authorized and (aid not in _tasks or _tasks[aid].done()):
                     _wake[aid] = asyncio.Event()

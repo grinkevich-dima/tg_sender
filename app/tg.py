@@ -7,7 +7,7 @@ from telethon import TelegramClient, errors, events, utils
 from telethon.tl.functions.contacts import GetContactsRequest
 from telethon.tl.types import User
 
-from . import ai, db, inbox, leads
+from . import ai, autopilot, db, inbox, leads
 from .config import API_HASH, API_ID, SESSIONS_DIR
 
 # Точка расширения: сюда подключится ИИ-разбор ответов.
@@ -441,7 +441,17 @@ class AccountClient:
                       (peer_id, self.id))
         if not lead:
             return False
-        return inbox.record(self.id, lead["id"], "out", text, tg_message_id, "telegram")
+        new = inbox.record(self.id, lead["id"], "out", text, tg_message_id, "telegram")
+        if new and autopilot.enabled():
+            try:
+                loop = asyncio.get_running_loop()     # вызов из обработчика события Telegram
+            except RuntimeError:
+                loop = None                           # вне цикла (скрипты, тесты) — проверку запускает вызывающий
+            if loop:
+                t = loop.create_task(autopilot.check_manual(self.id, lead["id"], tg_message_id))
+                _background.add(t)
+                t.add_done_callback(_background.discard)
+        return new
 
     async def handle_incoming(self, uid: int, text: str | None, tg_message_id: int | None, event=None):
         lead = db.one("SELECT * FROM leads WHERE tg_id=%s", (uid,))
@@ -449,7 +459,8 @@ class AccountClient:
             if inbox.record(self.id, lead["id"], "in", text, tg_message_id, "incoming") and ai.configured() and text:
                 mid = db.val("""SELECT id FROM messages WHERE account_id=%s AND lead_id=%s AND direction='in'
                                 AND tg_message_id=%s""", (self.id, lead["id"], tg_message_id))
-                t = asyncio.create_task(ai.classify_message(mid))   # разбор ответа ИИ — в фоне, приём не ждёт
+                # разбор ответа ИИ и автоответ (если включён в кампании) — в фоне, приём не ждёт
+                t = asyncio.create_task(autopilot.after_incoming(mid, lead["id"], self.id))
                 _background.add(t)
                 t.add_done_callback(_background.discard)
             inbox.auto_stage(lead["id"], "replied")

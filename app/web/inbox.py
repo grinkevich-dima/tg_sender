@@ -1,12 +1,12 @@
 """Инбокс: диалоги с лидами, ответ из панели, этап воронки, заметка."""
 from fastapi import APIRouter, Form, Request
 
-from .. import ai, auth, db, inbox, leads, worker
+from .. import ai, auth, autopilot, db, inbox, leads, worker
 from .common import back, page, user
 
 router = APIRouter(prefix="/inbox")
 PER_PAGE = 50
-SOURCE_RU = {"campaign": "кампания", "inbox": "из панели", "telegram": "в Telegram", "incoming": ""}
+SOURCE_RU = {"campaign": "кампания", "inbox": "из панели", "telegram": "в Telegram", "incoming": "", "ai": "🤖 ИИ"}
 
 
 def visible_accounts(u: dict) -> list[int] | None:
@@ -44,6 +44,8 @@ def _dialogs(request: Request, f: dict) -> tuple[list[dict], int]:
         params += [f"%{f['q']}%"] * 4
     if f["show"] == "waiting":       # последнее сообщение — от человека: ждёт ответа
         where.append("last.direction='in'")
+    elif f["show"] == "handoff":
+        where.append("l.ai_handoff IS NOT NULL")
     elif f["show"] == "unread":
         where.append("last.direction='in' AND last.created_at > COALESCE(l.inbox_read_at, '-infinity')")
     w = " AND ".join(where)
@@ -106,6 +108,10 @@ async def dialog_page(request: Request, lead_id: int):
                              WHERE cl.lead_id=%s ORDER BY c.id DESC""", (lead_id,)),
     }
     profiles = db.q("SELECT id, name FROM ai_profiles ORDER BY name")
+    camp = autopilot.campaign_for_lead(lead_id)
+    card["autopilot"] = {"campaign": camp, "on": bool(camp and camp["ai_autoreply"]) and autopilot.enabled(),
+                         "job": db.one("SELECT * FROM ai_reply_jobs WHERE lead_id=%s AND status IN ('pending','sending')",
+                                       (lead_id,))}
     return page(request, "inbox.html", lead=db.one("SELECT * FROM leads WHERE id=%s", (lead_id,)), msgs=msgs, card=card,
                 ai_on=ai.configured(), ai_profiles=profiles, ai_profile=ai.lead_profile(lead_id), LABELS=ai.LABELS,
                 LABEL_STAGE=ai.LABEL_STAGE,
@@ -169,9 +175,25 @@ async def dialog_send(request: Request, lead_id: int, text: str = Form(""), draf
     err = await worker.send_reply(lead_id, text, user(request)["id"])
     if err:
         return back(_back_to(lead_id, request), err=err)
+    autopilot.manager_intervened(lead_id, "из инбокса")
+    db.ex("UPDATE leads SET ai_handoff=NULL WHERE id=%s", (lead_id,))       # человек ответил — вопрос закрыт
     if draft_id and ai.learn_from_send(draft_id, lead_id, text.strip()):
         return back(_back_to(lead_id, request), msg="Отправлено. Черновик ушёл почти без правок — сохранён как пример для ИИ")
     return back(_back_to(lead_id, request))
+
+
+@router.post("/{lead_id}/autopilot/{action}")
+async def dialog_autopilot(request: Request, lead_id: int, action: str):
+    """Включить/выключить автоответы ИИ для этого человека."""
+    if not _lead(request, lead_id):
+        return back("/inbox", err="Диалог не найден")
+    if action == "on":
+        db.ex("UPDATE leads SET ai_paused=false, ai_handoff=NULL WHERE id=%s", (lead_id,))
+        return back(_back_to(lead_id, request), msg="Автопилот включён: ИИ ответит на следующее сообщение")
+    db.ex("UPDATE leads SET ai_paused=true WHERE id=%s", (lead_id,))
+    db.ex("""UPDATE ai_reply_jobs SET status='cancelled', reason='выключен вручную', done_at=now()
+             WHERE lead_id=%s AND status='pending'""", (lead_id,))
+    return back(_back_to(lead_id, request), msg="Автопилот для этого человека выключен")
 
 
 @router.post("/{lead_id}/stage")

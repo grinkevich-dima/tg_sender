@@ -8,6 +8,7 @@
     <option value="all" {% if f.show=='all' %}selected{% endif %}>Все диалоги</option>
     <option value="waiting" {% if f.show=='waiting' %}selected{% endif %}>Ждут ответа</option>
     <option value="unread" {% if f.show=='unread' %}selected{% endif %}>Непрочитанные</option>
+    <option value="handoff" {% if f.show=='handoff' %}selected{% endif %}>🙋 Нужен человек</option>
   </select>
   <select name="stage" style="width:auto;margin:0">
     <option value="0">Все этапы</option>
@@ -30,7 +31,7 @@
       <div class="top"><b>{% if d.unread %}<span class="dot"></span>{% endif %}{{ d.title or ((d.first_name ~ ' ' ~ d.last_name)|trim) or ('@' ~ d.username if d.username else '#' ~ d.id) }}</b>
         <small class="muted">{{ d.last_at|dt }}</small></div>
       <div class="preview">{{ 'Вы: ' if d.last_dir == 'out' else '' }}{{ (d.last_text or '')[:90] }}</div>
-      <small>{{ stage_badge(d.stage_name, d.is_goal, d.is_lost) }} <span class="muted">{{ d.acc_label or '' }}</span></small>
+      <small>{{ stage_badge(d.stage_name, d.is_goal, d.is_lost) }}{% if d.ai_handoff %} <span class="stage lost" title="{{ d.ai_handoff }}">🙋 нужен человек</span>{% endif %} <span class="muted">{{ d.acc_label or '' }}</span></small>
     </a>
     {% else %}<p class="muted" style="padding:.8rem">Диалогов нет. Они появятся, когда лиды ответят на сообщения кампаний.</p>{% endfor %}
     {% if total > f.p * per_page %}<a class="dlg-item" href="?{{ qs }}&p={{ f.p + 1 }}">Ещё →</a>{% endif %}
@@ -41,6 +42,13 @@
     <p style="margin-bottom:.4rem"><a href="/inbox{{ '?' ~ qs if qs else '' }}" class="muted">← к списку</a></p>
     <h4 style="margin-bottom:.2rem">{{ lead.title or ((lead.first_name ~ ' ' ~ lead.last_name)|trim) or '—' }}
       {% if lead.username %}<small><a href="https://t.me/{{ lead.username }}" target="_blank" rel="noopener">@{{ lead.username }}</a></small>{% endif %}</h4>
+    {% if lead.ai_handoff %}<div class="flash err">🙋 Нужен человек: {{ lead.ai_handoff }}. Ответьте сами — автопилот для этого человека отключится.</div>{% endif %}
+    {% if card.autopilot.on %}<p class="muted" style="margin:.2rem 0 .5rem">
+      {% if lead.ai_paused %}🤖 Автопилот для этого человека выключен
+        <form method="post" action="/inbox/{{ lead.id }}/autopilot/on{{ '?' ~ qs if qs else '' }}" style="display:inline"><button class="outline" style="width:auto;padding:0 .6rem;margin:0">включить</button></form>
+      {% else %}🤖 ИИ отвечает сам (кампания «{{ card.autopilot.campaign.name }}»){% if card.autopilot.job %} · ответ ≈ {{ card.autopilot.job.due_at|dt }}{% endif %}
+        <form method="post" action="/inbox/{{ lead.id }}/autopilot/off{{ '?' ~ qs if qs else '' }}" style="display:inline"><button class="outline secondary" style="width:auto;padding:0 .6rem;margin:0">выключить</button></form>
+      {% endif %}</p>{% endif %}
     {% if lead.opted_out_at %}<div class="flash err">Лид отписался ({{ lead.opt_out_reason or '' }}) — писать ему нельзя.</div>{% endif %}
 
     <div class="chat" id="chat">

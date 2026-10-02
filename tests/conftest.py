@@ -21,7 +21,7 @@ from telethon.tl.types import InputPeerUser  # noqa: E402
 from app import auth, db, worker  # noqa: E402
 from app.tg import tgm  # noqa: E402
 
-TABLES = ["ai_sandbox_messages", "ai_sandboxes", "ai_drafts", "ai_examples", "ai_cards", "ai_profiles", "found_chat_hits", "found_chats", "chat_searches", "segment_leads", "segments", "messages", "campaign_leads", "campaign_steps", "campaign_accounts", "campaigns", "tg_dialogs",
+TABLES = ["ai_reply_jobs", "ai_sandbox_messages", "ai_sandboxes", "ai_drafts", "ai_examples", "ai_cards", "ai_profiles", "found_chat_hits", "found_chats", "chat_searches", "segment_leads", "segments", "messages", "campaign_leads", "campaign_steps", "campaign_accounts", "campaigns", "tg_dialogs",
           "leads", "templates", "event_log", "tg_accounts", "users", "settings"]
 
 
@@ -83,6 +83,18 @@ class FakeClient:
         if x not in self.known:
             raise ValueError(f'No user has "{x}" as username')
         return InputPeerUser(user_id=self.known[x], access_hash=0)
+
+    def action(self, entity, act):
+        """«печатает…»: запоминаем, кому и что показывали."""
+        client = self
+
+        class _Act:
+            async def __aenter__(self):
+                client.actions = getattr(client, "actions", []) + [(entity, act)]
+
+            async def __aexit__(self, *exc):
+                return False
+        return _Act()
 
     async def send_message(self, entity, text, reply_to=None, link_preview=True):
         if self.delay:

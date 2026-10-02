@@ -5,6 +5,11 @@
 <header><strong>Правила команды</strong></header>
 <label>Стоп-слова (через запятую)<input name="stop_words" value="{{ stop_words }}" required></label>
 <small class="muted">Если лид ответит сообщением, которое начинается с одного из этих слов, он исключается из всех рассылок всей команды.</small>
+<hr>
+<label><input type="checkbox" name="ai_autopilot" value="1" role="switch" {% if autopilot %}checked{% endif %}> <b>Автоответы ИИ разрешены</b> <small class="muted">— общий выключатель; сами автоответы включаются в каждой кампании</small></label>
+<label>Не больше автоответов одному человеку за сутки<input type="number" name="ai_autopilot_daily" value="{{ autopilot_daily }}" min="1" max="50"></label>
+<small class="muted">Дальше ИИ передаёт диалог человеку.</small>
+<hr>
 <label style="margin-top:1rem">Не писать одному человеку чаще раза в, дней<input type="number" name="recontact_days" value="{{ recontact_days }}" min="0" max="3650"></label>
 <small class="muted">Касается личных сообщений из разных кампаний: если лиду уже писали за этот срок, при постановке в очередь он будет пропущен с объяснением. Чатов не касается.</small>
 </article>

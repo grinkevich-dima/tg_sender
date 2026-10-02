@@ -169,6 +169,19 @@ async def campaign_set_accounts(request: Request, cid: int):
     return back(f"/campaigns/{cid}", msg="Аккаунты кампании обновлены. Уже закреплённые лиды остаются за своими аккаунтами")
 
 
+@router.post("/{cid}/autoreply")
+async def campaign_autoreply(request: Request, cid: int):
+    if not _get(request, cid):
+        return back("/campaigns", err="Кампания не найдена")
+    on = bool((await request.form()).get("on"))
+    db.ex("UPDATE campaigns SET ai_autoreply=%s WHERE id=%s", (on, cid))
+    if not on:
+        db.ex("""UPDATE ai_reply_jobs SET status='cancelled', reason='автоответ выключен в кампании', done_at=now()
+                 WHERE campaign_id=%s AND status='pending'""", (cid,))
+    db.log(f"Кампания #{cid}: автоответы ИИ {'включены' if on else 'выключены'} ({user(request)['login']})", "warn")
+    return back(f"/campaigns/{cid}", msg="ИИ отвечает сам в этой кампании" if on else "Автоответы выключены")
+
+
 @router.post("/{cid}/ai-profile")
 async def campaign_ai_profile(request: Request, cid: int):
     if not _get(request, cid):
