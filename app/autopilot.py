@@ -10,8 +10,6 @@ import random
 import re
 from datetime import datetime, timedelta
 
-from telethon import errors
-
 from . import ai, db, inbox
 from .tasks import spawn
 
@@ -209,7 +207,8 @@ async def send_job(job: dict) -> str:
 async def _send_job(job: dict) -> str:
     """Проверить, что отвечать всё ещё можно, написать ответ, «печатать» и отправить."""
     from .tg import tgm
-    from .worker import TRANSIENT_ERRORS, _flood, account, in_work_hours, paused_until
+    from .delivery import Skip, deliver, describe, error_kind, flood_pause
+    from .worker import account, in_work_hours, paused_until
     jid, lead_id, acc_id = job["id"], job["lead_id"], job["account_id"]
     lead = db.one("SELECT * FROM leads WHERE id=%s", (lead_id,))
     camp = db.one("SELECT * FROM campaigns WHERE id=%s", (job["campaign_id"],)) if job["campaign_id"] else None
@@ -243,6 +242,8 @@ async def _send_job(job: dict) -> str:
         text = (await ai.chat(msgs)).strip()
     except ai.AIError as e:
         handoff(lead_id, f"ИИ недоступен: {e}"[:200], acc_id)
+        from . import notify
+        notify.admin(f"🤖 ИИ недоступен — автоответы передаются людям: {e}"[:400], key="ai-down")
         return "handoff"
     if not text or text.upper().startswith("HANDOFF"):
         handoff(lead_id, text.split(":", 1)[1].strip() if ":" in text else "ИИ не смог ответить", acc_id)
@@ -255,27 +256,26 @@ async def _send_job(job: dict) -> str:
     if problem:
         handoff(lead_id, f"ответ ИИ не отправлен — {problem}", acc_id)
         return "handoff"
-    try:
-        async with client.lock:
-            entity = await client.resolve(lead)
-        async with client.client.action(entity, "typing"):       # «печатает…» столько, сколько набирал бы человек
-            await asyncio.sleep(typing_seconds(text))
+    def manager_answered():
         # пока «печатали», менеджер мог ответить сам
         if db.one("""SELECT 1 FROM messages WHERE lead_id=%s AND direction='out' AND source IN ('inbox','telegram')
                      AND created_at > %s""", (lead_id, job["created_at"])):
-            manager_intervened(lead_id, "сам")
-            return "cancelled"
-        async with client.lock:
-            sent = await client.client.send_message(entity, text, link_preview=True)
-    except (errors.FloodWaitError, errors.PeerFloodError) as e:
-        _flood(acc_id, e)
-        db.ex("UPDATE ai_reply_jobs SET status='pending', due_at=%s WHERE id=%s", (db.now_utc() + timedelta(minutes=10), jid))
-        return "postponed"
-    except TRANSIENT_ERRORS:
-        db.ex("UPDATE ai_reply_jobs SET status='pending', due_at=%s WHERE id=%s", (db.now_utc() + timedelta(minutes=2), jid))
-        return "postponed"
+            raise Skip("менеджер ответил сам")
+    try:
+        # «печатает…» столько, сколько набирал бы человек
+        sent = await deliver(client, lead, text, typing=typing_seconds(text), check_before_send=manager_answered)
+    except Skip:
+        manager_intervened(lead_id, "сам")
+        return "cancelled"
     except Exception as e:
-        _finish(jid, "failed", f"{type(e).__name__}: {e}"[:300])
+        kind = error_kind(e)
+        if kind in ("flood", "transient"):
+            if kind == "flood":
+                flood_pause(acc_id, e)
+            later = db.now_utc() + timedelta(minutes=10 if kind == "flood" else 2)
+            db.ex("UPDATE ai_reply_jobs SET status='pending', due_at=%s WHERE id=%s", (later, jid))
+            return "postponed"
+        _finish(jid, "failed", describe(e)[:300])
         handoff(lead_id, f"не удалось отправить автоответ: {type(e).__name__}", acc_id)
         return "failed"
     inbox.record(acc_id, lead_id, "out", text, sent.id, "ai")

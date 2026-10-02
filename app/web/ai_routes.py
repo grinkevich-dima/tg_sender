@@ -27,7 +27,8 @@ async def ai_page(request: Request):
                        FROM ai_profiles p LEFT JOIN users u ON u.id=p.created_by ORDER BY p.name""")
     drafts = db.one("""SELECT COUNT(*) total, COUNT(sent_at) sent,
                        COUNT(*) FILTER (WHERE similarity >= %s) as_is FROM ai_drafts""", (ai.EXAMPLE_SIMILARITY,))
-    return page(request, "ai.html", profiles=profiles, base=db.get_setting("ai_base_instruction"),
+    use7, use30 = await ai.usage(7), await ai.usage(30)
+    return page(request, "ai.html", profiles=profiles, base=db.get_setting("ai_base_instruction"), use7=use7, use30=use30,
                 cards=db.q("SELECT * FROM ai_cards WHERE profile_id IS NULL ORDER BY id"), drafts=drafts,
                 status=await ai.status(), model=AI_MODEL, base_url=AI_BASE_URL)
 

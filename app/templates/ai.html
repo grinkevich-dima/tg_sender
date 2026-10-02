@@ -3,6 +3,18 @@
 <h3>ИИ-помощник <a href="/ai/sandbox" role="button" class="outline" style="width:auto;font-size:.5em;padding:.3rem .8rem">🧪 Тренажёр</a></h3>
 {% if status %}<div class="flash err">ИИ: {{ status }}</div>
 {% else %}<p class="muted">Модель <code>{{ model }}</code> подключена ({{ base_url }}). ИИ только предлагает черновики и разбирает ответы — отправляет всегда человек.</p>{% endif %}
+{% if use30 %}
+<details><summary><strong>Расход ИИ</strong> <small class="muted">· за 7 дней: {{ use7.totals.calls if use7 else '—' }} запросов,
+  {{ '{:,}'.format(use7.totals.totalTokens or 0).replace(',', ' ') if use7 else '—' }} токенов · за 30 дней: {{ use30.totals.calls }} запросов,
+  {{ '{:,}'.format(use30.totals.totalTokens or 0).replace(',', ' ') }} токенов{% if use30.totals.cost %}, стоимость {{ use30.totals.cost }}{% endif %}</small></summary>
+<table>
+<thead><tr><th>Модель</th><th>Запросов</th><th>Токены: запрос / ответ</th><th>Стоимость</th></tr></thead>
+{% for m in use30.byModel %}<tr><td><code>{{ m.modelId }}</code></td><td>{{ m.calls }}</td>
+<td>{{ '{:,}'.format(m.promptTokens or 0).replace(',', ' ') }} / {{ '{:,}'.format(m.completionTokens or 0).replace(',', ' ') }}</td><td>{{ m.cost if m.cost is not none else "—" }}</td></tr>{% endfor %}
+</table>
+<small class="muted">Данные Вайбкода по ключу целиком — включают использование этого ключа и вне панели.</small>
+</details>
+{% endif %}
 {% if drafts.total %}<p class="muted">Черновиков: {{ drafts.total }}, отправлено: {{ drafts.sent }}, из них почти без правок: {{ drafts.as_is }}.</p>{% endif %}
 
 <article>

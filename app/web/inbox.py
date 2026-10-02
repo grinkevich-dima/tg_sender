@@ -1,7 +1,7 @@
 """Инбокс: диалоги с лидами, ответ из панели, этап воронки, заметка."""
 from fastapi import APIRouter, Form, Request
 
-from .. import ai, auth, autopilot, db, inbox, leads, worker
+from .. import ai, auth, autopilot, db, delivery, inbox, leads
 from .common import back, page, user
 
 router = APIRouter(prefix="/inbox")
@@ -172,7 +172,7 @@ async def dialog_send(request: Request, lead_id: int, text: str = Form(""), draf
     acc = db.one("SELECT * FROM tg_accounts WHERE id=%s", (lead["owner_account_id"],)) if lead["owner_account_id"] else None
     if not auth.can_use_account(user(request), acc):
         return back(_back_to(lead_id, request), err="Отвечать может менеджер аккаунта, за которым закреплён лид")
-    err = await worker.send_reply(lead_id, text, user(request)["id"])
+    err = await delivery.send_reply(lead_id, text, user(request)["id"])
     if err:
         return back(_back_to(lead_id, request), err=err)
     autopilot.manager_intervened(lead_id, "из инбокса")

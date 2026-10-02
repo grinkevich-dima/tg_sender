@@ -21,7 +21,7 @@ def fake(monkeypatch):
         return state["answer"]
     monkeypatch.setattr(ai, "AI_API_KEY", "k")
     monkeypatch.setattr(ai, "chat", chat)
-    monkeypatch.setattr(autopilot, "typing_seconds", lambda text, rng=None: 0)
+    monkeypatch.setattr(autopilot, "typing_seconds", lambda text, rng=None: 0.001)
     monkeypatch.setattr(autopilot, "MANUAL_CHECK_AFTER", 0)
     return state
 

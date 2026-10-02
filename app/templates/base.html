@@ -70,6 +70,17 @@
   .funnel { display:flex; flex-wrap:wrap; gap:.4rem; margin:.5rem 0 1rem; }
   .funnel div { border:1px solid var(--pico-muted-border-color); border-radius:8px; padding:.35rem .7rem; font-size:.85em; }
   .funnel b { font-size:1.15em; margin-left:.3rem; }
+  /* меню: на узком экране — под кнопкой ☰ */
+  .nav-toggle, .nav-burger, .nav-unread { display:none; }
+  @media (max-width: 900px) {
+    nav.top { flex-wrap: wrap; }
+    .nav-burger { display:inline-block; cursor:pointer; font-size:1.5rem; line-height:1; padding:.4rem .6rem; margin-left:auto; user-select:none; }
+    .nav-unread { display:inline-block; margin-left:.4rem; text-decoration:none; }
+    .nav-menu { display:none !important; width:100%; flex-direction:column; align-items:stretch; margin:0; padding:.3rem 0 .6rem; }
+    .nav-menu li { padding:.15rem 0 !important; }
+    .nav-menu a { display:block; padding:.45rem .2rem; }
+    .nav-toggle:checked ~ .nav-menu { display:flex !important; }
+  }
   .tab-bar { display:flex; flex-wrap:wrap; justify-content:flex-start; gap:.25rem; border-bottom:1px solid var(--pico-muted-border-color); margin:-.25rem 0 1rem; }
   .tab-bar button { width:auto; margin:0; padding:.45rem .9rem; font-size:.9em; background:none; border:none; border-bottom:2px solid transparent;
                     border-radius:0; color:var(--pico-muted-color); }
@@ -89,9 +100,11 @@
 </head>
 <body>
 <nav class="container top">
-  <ul><li><strong>📨 TG Sender</strong></li></ul>
+  <ul><li><strong>📨 TG Sender</strong>{% if menu_unread %} <a href="/inbox" class="badge b-replied nav-unread" aria-label="Непрочитанных: {{ menu_unread }}">{{ menu_unread }}</a>{% endif %}</li></ul>
   {% if user %}
-  <ul>
+  <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-hidden="true" tabindex="-1">
+  <label for="nav-toggle" class="nav-burger" aria-label="Меню" role="button" tabindex="0">☰</label>
+  <ul class="nav-menu">
     <li><a href="/">Дашборд</a></li>
     <li><a href="/inbox">Инбокс{% if menu_unread %} <span class="badge b-replied" id="menu-unread">{{ menu_unread }}</span>{% endif %}</a></li>
     <li><a href="/campaigns">Кампании</a></li>
@@ -114,5 +127,10 @@
   {% if flash and flash.err %}<div class="flash err">{{ flash.err }}</div>{% endif %}
   {% block content %}{% endblock %}
 </main>
+<script>
+document.querySelector('.nav-burger')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const t = document.getElementById('nav-toggle'); t.checked = !t.checked; }
+});
+</script>
 </body>
 </html>

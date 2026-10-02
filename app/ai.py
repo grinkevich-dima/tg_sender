@@ -76,6 +76,18 @@ async def status() -> str:
     return "" if AI_MODEL in ids else f"модели {AI_MODEL} нет среди доступных"
 
 
+async def usage(days: int = 30) -> dict | None:
+    """Расход ИИ по ключу за период (Вайбкод /ai/usage): {"totals": {...}, "byModel": [...]}; None — недоступно."""
+    if not configured():
+        return None
+    try:
+        d = await asyncio.to_thread(_post, f"/ai/usage?days={int(days)}", None, 15)
+    except AIError:
+        return None
+    data = d.get("data") if isinstance(d, dict) else None
+    return data if isinstance(data, dict) and "totals" in data else None
+
+
 # ---------- слой 2: база знаний ----------
 def _stems(text: str) -> set[str]:
     words = re.findall(r"[а-яёa-z0-9]{4,}", (text or "").lower())

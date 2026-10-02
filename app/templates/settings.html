@@ -10,6 +10,12 @@
 <label>Не больше автоответов одному человеку за сутки<input type="number" name="ai_autopilot_daily" value="{{ autopilot_daily }}" min="1" max="50"></label>
 <small class="muted">Дальше ИИ передаёт диалог человеку.</small>
 <hr>
+<label>Уведомления админу в Telegram — в «Избранное» аккаунта
+  <select name="notify_account_id"><option value="">— не присылать —</option>
+    {% for a in accounts %}<option value="{{ a.id }}" {% if a.id|string == notify_account %}selected{% endif %}>{{ a.label or a.first_name or ('#' ~ a.id) }}</option>{% endfor %}
+  </select></label>
+<small class="muted">PEER_FLOOD на аккаунте, ИИ недоступен, ошибка фоновой задачи, много «нужен человек» за сутки. Одинаковые — не чаще раза в 30 минут.</small>
+<hr>
 <label>Хранить журнал событий, дней<input type="number" name="log_keep_days" value="{{ log_keep_days }}" min="7" max="3650"></label>
 <small class="muted">Старые записи журнала, отработанные автоответы и черновики ИИ удаляются раз в сутки.</small>
 <hr>
@@ -40,5 +46,6 @@
 </form>
 <small class="muted">«Цель» — этап, ради которого ведётся работа (например, «пришёл / купил»): по нему будут считаться отчёты.</small>
 </article>
+<form method="post" action="/settings/notify-test" style="margin-top:.5rem"><button class="outline" style="width:auto">Отправить тестовое уведомление</button></form>
 <p class="muted">Лимиты, прогрев и рабочие часы у каждого аккаунта свои — в разделе <a href="/accounts">«Аккаунты»</a>.</p>
 {% endblock %}

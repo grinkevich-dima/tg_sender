@@ -5,7 +5,7 @@ import io
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
-from .. import auth, campaigns as cmp, db, leads, worker
+from .. import auth, campaigns as cmp, db, delivery, leads, worker
 from ..tasks import spawn
 from ..tg import tgm
 from .common import STATE_RU, back, eta_days, local_url, page, read_upload, user
@@ -291,8 +291,8 @@ async def row_send_now(request: Request, rid: int):
         return back("/campaigns", err="Строка не найдена")
     ref = local_url(request.headers.get("referer"), f"/campaigns/{cl['campaign_id']}")
     try:
-        res, why = await worker.send_now(rid)
-    except worker.TRANSIENT_ERRORS as e:
+        res, why = await delivery.send_now(rid)
+    except delivery.TRANSIENT_ERRORS as e:
         return back(ref, err=f"Нет связи с Telegram ({type(e).__name__}), строка оставлена как была — повторите позже")
     except ValueError as e:
         return back(ref, err=str(e))

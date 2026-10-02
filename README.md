@@ -1,5 +1,7 @@
 # TG Sender: персональные рассылки тёплой аудитории в Telegram
 
+[![tests](https://github.com/grinkevich-dima/tg_sender/actions/workflows/tests.yml/badge.svg)](https://github.com/grinkevich-dima/tg_sender/actions/workflows/tests.yml)
+
 Веб-панель для команды: люди регистрируются на ваши вебинары и семинары и вступают в вашу группу Telegram, а менеджеры пишут им персональные сообщения **от своих личных аккаунтов**. Панель собирает аудиторию в сегменты, следит за лимитами, закреплением лидов, отписками и ответами.
 
 Стек: Python, [Telethon](https://docs.telethon.dev) (MTProto), FastAPI, Postgres. Запуск — Docker Compose.

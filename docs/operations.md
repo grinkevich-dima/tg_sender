@@ -106,3 +106,7 @@ SAMPLE_XLSX=path/to/list.xlsx scripts/test.sh     # + тест на реальн
 scripts/test.sh -k team                           # только часть тестов
 ```
 Тесты не обращаются к Telegram: используется имитация клиента. База `tg_test` пересоздаётся при каждом прогоне.
+
+Проверка кода: `docker compose --profile test run --rm tests ruff check app tests` (настройки — `ruff.toml`).
+
+**GitHub Actions** (`.github/workflows/tests.yml`) при каждом пуше и pull request поднимает Postgres 16 и прогоняет `ruff` и `pytest`; статус — бейдж в README.

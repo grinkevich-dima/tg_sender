@@ -1,7 +1,7 @@
 """Инбокс и воронка: автоэтапы, свои сообщения из Telegram, ответ из панели, права, этапы."""
 from telethon import errors
 
-from app import campaigns, db, inbox, worker
+from app import campaigns, db, delivery, inbox, worker
 from app.tg import tgm
 from tests.conftest import FakeClient, add_rows, drain, make_account, make_campaign, make_lead, make_user, run
 from tests.test_web import browser
@@ -54,7 +54,7 @@ def test_reply_from_panel():
     u = make_user()
     client = FakeClient()
     a, lid = _conversation(u, client)
-    assert run(worker.send_reply(lid, "Привет! Ссылка на запись: …", u["id"])) == ""
+    assert run(delivery.send_reply(lid, "Привет! Ссылка на запись: …", u["id"])) == ""
     assert client.sent[-1][1].startswith("Привет! Ссылка")
     m = db.one("SELECT * FROM messages WHERE source='inbox'")
     assert m["sender_user_id"] == u["id"] and m["direction"] == "out"
@@ -66,14 +66,14 @@ def test_reply_refused_cases():
     client = FakeClient()
     a, lid = _conversation(u, client)
     fresh = make_lead(tg_id=501, owner_account_id=a)
-    assert "первое сообщение" in run(worker.send_reply(fresh, "привет", u["id"]))
-    assert run(worker.send_reply(lid, "   ", u["id"])) == "Пустое сообщение"
+    assert "первое сообщение" in run(delivery.send_reply(fresh, "привет", u["id"]))
+    assert run(delivery.send_reply(lid, "   ", u["id"])) == "Пустое сообщение"
     client.fail[500] = errors.FloodWaitError(request=None, capture=60)
-    assert "ограничил" in run(worker.send_reply(lid, "ещё раз", u["id"]))
-    assert "на паузе" in run(worker.send_reply(lid, "и ещё", u["id"]))      # после FloodWait аккаунт на паузе
+    assert "ограничил" in run(delivery.send_reply(lid, "ещё раз", u["id"]))
+    assert "на паузе" in run(delivery.send_reply(lid, "и ещё", u["id"]))      # после FloodWait аккаунт на паузе
     db.ex("UPDATE tg_accounts SET paused_until=NULL")
     db.ex("UPDATE leads SET opted_out_at=now() WHERE id=%s", (lid,))
-    assert "отписался" in run(worker.send_reply(lid, "привет", u["id"]))
+    assert "отписался" in run(delivery.send_reply(lid, "привет", u["id"]))
 
 
 def test_inbox_pages_unread_and_rights():

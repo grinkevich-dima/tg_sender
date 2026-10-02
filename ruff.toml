@@ -1,0 +1,7 @@
+# Проверка кода: ruff check   (в CI и перед коммитом)
+target-version = "py312"
+line-length = 140
+
+[lint]
+select = ["E", "F", "W"]
+ignore = ["E501", "E731"]   # длинные строки (SQL, тексты) и lambda в тестах — допустимы

@@ -57,7 +57,8 @@ async def settings_page(request: Request):
     return page(request, "settings.html", stop_words=db.get_setting("stop_words"),
                 recontact_days=recontact_days(), stages=inbox.funnel(),
                 autopilot=db.get_setting("ai_autopilot") == "1", autopilot_daily=db.get_setting("ai_autopilot_daily"),
-                log_keep_days=db.get_setting("log_keep_days"))
+                log_keep_days=db.get_setting("log_keep_days"), notify_account=db.get_setting("notify_account_id"),
+                accounts=[a for a in auth.user_accounts(user(request), only_active=True) if tgm.get(a["id"]).authorized])
 
 
 @router.post("/settings")
@@ -81,7 +82,21 @@ async def settings_save(request: Request, stop_words: str = Form(""), recontact_
     if not (log_keep_days.strip().isdigit() and 7 <= int(log_keep_days) <= 3650):
         return back("/settings", err="Срок хранения журнала — от 7 до 3650 дней")
     db.set_setting("log_keep_days", str(int(log_keep_days)))
+    form = await request.form()
+    na = str(form.get("notify_account_id") or "")
+    db.set_setting("notify_account_id", na if na.isdigit() else "")
     return back("/settings", msg="Сохранено")
+
+
+@router.post("/settings/notify-test")
+async def notify_test(request: Request):
+    if not auth.is_admin(user(request)):
+        return back("/", err="Только админ")
+    from .. import notify
+    notify.reset()
+    if not notify.admin("Тестовое уведомление: так будут приходить важные события панели.", key="test"):
+        return back("/settings", err="Не отправлено: выберите подключённый аккаунт для уведомлений и сохраните")
+    return back("/settings", msg="Отправлено — проверьте «Избранное» выбранного аккаунта")
 
 
 @router.get("/log")

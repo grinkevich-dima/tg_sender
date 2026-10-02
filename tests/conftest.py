@@ -50,8 +50,9 @@ def clean():
              WHERE funnel_stages.id=v.id""")
     for k, v in db.DEFAULT_SETTINGS.items():
         db.set_setting(k, v)
-    from app import inbox
+    from app import inbox, notify
     inbox.invalidate_unread()
+    notify.reset()
     tgm.accounts.clear()
     tgm.prepare_state.clear()
     tgm.groups_state.clear()

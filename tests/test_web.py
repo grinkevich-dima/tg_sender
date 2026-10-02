@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
-from app import campaigns, db, worker
+from app import campaigns, db, delivery, worker
 from app.main import app
 from tests.conftest import FakeClient, add_rows, cl_state, make_account, make_campaign, make_lead, make_user, run
 
@@ -120,7 +120,7 @@ def test_double_click_sends_once():
     r, = add_rows(cid, [make_lead(tg_id=77)])
 
     async def go():
-        return await asyncio.gather(worker.send_now(r), worker.send_now(r))
+        return await asyncio.gather(delivery.send_now(r), delivery.send_now(r))
     results = sorted(res for res, _ in run(go()))
     assert "sent" in results and len(client.sent) == 1
     assert cl_state(r)["state"] == "sent"
@@ -155,9 +155,9 @@ def test_unexpected_error_marks_failed_and_network_error_restores():
     campaigns.enqueue(cid, {"state": ["new"]})
     client.fail[80] = TypeError("boom")
     client.fail[81] = ConnectionError("down")
-    assert run(worker.send_item(db.one("SELECT * FROM campaign_leads WHERE id=%s", (r1,)))) == "failed"
+    assert run(delivery.send_item(db.one("SELECT * FROM campaign_leads WHERE id=%s", (r1,)))) == "failed"
     with pytest.raises(ConnectionError):
-        run(worker.send_item(db.one("SELECT * FROM campaign_leads WHERE id=%s", (r2,))))
+        run(delivery.send_item(db.one("SELECT * FROM campaign_leads WHERE id=%s", (r2,))))
     assert cl_state(r2)["state"] == "queued"
 
 
@@ -168,7 +168,7 @@ def test_opted_out_twin_found_by_username_is_skipped():
     make_lead(tg_id=5005, opted_out_at=db.now_utc())
     cid = make_campaign(u["id"], [a])
     r, = add_rows(cid, [make_lead(username="someone")])
-    assert run(worker.send_now(r))[0] == "skipped"
+    assert run(delivery.send_now(r))[0] == "skipped"
     assert client.sent == []
 
 
