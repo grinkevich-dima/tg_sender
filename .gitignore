@@ -10,6 +10,8 @@ backups/
 start.log
 *.zip
 *.xlsx
+# образец с вымышленными данными (scripts/make_xlsx_sample.py) — в репозитории
+!app/static/xlsx-sample.xlsx
 .DS_Store
 .venv/
 __pycache__/
