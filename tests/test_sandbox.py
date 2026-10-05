@@ -27,7 +27,7 @@ def fake(monkeypatch):
 
 
 def _profile(card=True):
-    pid = db.ex("INSERT INTO ai_profiles(name, instruction) VALUES ('Вебинар', 'Пишет Дмитрий') RETURNING id")
+    pid = db.ex("INSERT INTO ai_profiles(name, instruction) VALUES ('Сайты', 'Пишет Дмитрий') RETURNING id")
     if card:
         db.ex("INSERT INTO ai_cards(profile_id, title, body) VALUES (%s, 'Запись', 'Запись доступна 7 дней')", (pid,))
     return pid
@@ -36,15 +36,15 @@ def _profile(card=True):
 def test_dialog_with_debug(fake):
     u = make_user()
     pid = _profile()
-    sid = sandbox.create(u["id"], pid, {"name": "Ольга", "group": "Вебинар: маркетинг", "stage": "интерес"},
-                         "interested", "", "Ольга, спасибо, что были на вебинаре!")
+    sid = sandbox.create(u["id"], pid, {"name": "Ольга", "group": "Клуб предпринимателей", "stage": "интерес"},
+                         "interested", "", "Ольга, спасибо, что вступили в клуб!")
     run(sandbox.client_says(sid, "А запись будет?"))
     msgs = sandbox.messages(sid)
-    assert [(m["role"], m["text"]) for m in msgs] == [("bot", "Ольга, спасибо, что были на вебинаре!"),
+    assert [(m["role"], m["text"]) for m in msgs] == [("bot", "Ольга, спасибо, что вступили в клуб!"),
                                                       ("client", "А запись будет?"), ("bot", "Ответ бота 1")]
     assert msgs[1]["label"] == "question" and msgs[1]["note"] == "спрашивает про запись"
     dbg = msgs[2]["debug"]
-    assert dbg["profile"] == "Вебинар" and dbg["cards"] == ["Запись"] and "Пишет Дмитрий" in dbg["system"]
+    assert dbg["profile"] == "Сайты" and dbg["cards"] == ["Запись"] and "Пишет Дмитрий" in dbg["system"]
     assert "Ольга" in dbg["person"] and "Этап воронки: интерес" in dbg["person"]
 
 
@@ -84,14 +84,14 @@ def test_pages_rights_and_opening_from_campaign(fake):
     admin = make_user("admin")
     make_user("anna", "manager")
     pid = _profile()
-    cid = make_campaign(admin["id"], [make_account(admin["id"])], body="{first_name}, спасибо за вебинар!")
+    cid = make_campaign(admin["id"], [make_account(admin["id"])], body="{first_name}, спасибо за интерес!")
     db.ex("UPDATE campaigns SET ai_profile_id=%s WHERE id=%s", (pid, cid))
     a, m = browser("admin"), browser("anna")
     assert a.get("/ai/sandbox").status_code == 200
     r = m.post("/ai/sandbox/create", data={"profile_id": pid, "persona": "busy", "name": "Олег", "campaign_opening": "1"},
                follow_redirects=False)
     sid = int(r.headers["location"].rsplit("/", 1)[1])
-    assert sandbox.messages(sid)[0]["text"] == "Олег, спасибо за вебинар!"        # первое сообщение кампании
+    assert sandbox.messages(sid)[0]["text"] == "Олег, спасибо за интерес!"        # первое сообщение кампании
     assert m.post(f"/ai/sandbox/{sid}/say", data={"text": "кто это?"}).json() == {"ok": True}
     assert m.post(f"/ai/sandbox/{sid}/robot", data={"turns": "2"}).json() == {"ok": True, "turns": 2}
     html = m.get(f"/ai/sandbox/{sid}").text
@@ -102,8 +102,8 @@ def test_pages_rights_and_opening_from_campaign(fake):
     bot = db.val("SELECT id FROM ai_sandbox_messages WHERE sandbox_id=%s AND role='bot' AND debug IS NOT NULL ORDER BY id LIMIT 1", (sid,))
     m.post(f"/ai/sandbox/{sid}/save/{bot}")
     assert db.val("SELECT COUNT(*) FROM ai_examples") == 0
-    a.post(f"/ai/sandbox/{sid}/save/{bot}", data={"corrected": "Это Дмитрий, вы были на нашем вебинаре 🙂"})
-    assert db.val("SELECT answer FROM ai_examples") == "Это Дмитрий, вы были на нашем вебинаре 🙂"
+    a.post(f"/ai/sandbox/{sid}/save/{bot}", data={"corrected": "Это Дмитрий, мы знакомы по клубу 🙂"})
+    assert db.val("SELECT answer FROM ai_examples") == "Это Дмитрий, мы знакомы по клубу 🙂"
     # чужой диалог менеджер не видит, админ видит
     sid_admin = sandbox.create(admin["id"], None, {}, "interested", "", "")
     assert m.get(f"/ai/sandbox/{sid_admin}", follow_redirects=False).status_code == 303
@@ -124,13 +124,13 @@ def test_dialog_always_starts_with_bot(fake, monkeypatch):
     monkeypatch.setattr(ai, "chat", spy)
     c = browser("admin")
     r = c.post("/ai/sandbox/create", data={"profile_id": pid, "persona": "interested", "name": "Ольга",
-                                           "group": "Вебинар: маркетинг", "campaign_opening": "1"}, follow_redirects=False)
+                                           "group": "Клуб предпринимателей", "campaign_opening": "1"}, follow_redirects=False)
     sid = int(r.headers["location"].rsplit("/", 1)[1])
     first, = sandbox.messages(sid)
-    assert first["role"] == "bot" and first["text"] == "Ответ бота 1" and first["debug"]["profile"] == "Вебинар"
+    assert first["role"] == "bot" and first["text"] == "Ответ бота 1" and first["debug"]["profile"] == "Сайты"
     assert "[Служебно, не от клиента]: переписки ещё нет. Напиши наше первое сообщение" in seen[0]
     # дальше отвечаю как клиент
-    c.post(f"/ai/sandbox/{sid}/say", data={"text": "Здравствуйте! А что за вебинар?"})
+    c.post(f"/ai/sandbox/{sid}/say", data={"text": "Здравствуйте! А что за клуб?"})
     assert [m["role"] for m in sandbox.messages(sid)] == ["bot", "client", "bot"]
     # начало можно перегенерировать
     sid2 = int(c.post("/ai/sandbox/create", data={"profile_id": pid}, follow_redirects=False).headers["location"].rsplit("/", 1)[1])

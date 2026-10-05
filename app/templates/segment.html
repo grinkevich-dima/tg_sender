@@ -21,7 +21,7 @@
     <button type="button" role="tab" data-tab="tag">По тегу</button>
   </nav>
   <section role="tabpanel" data-panel="groups">
-  <p class="muted" style="margin-bottom:.6rem">Участники вебинаров и семинаров</p>
+  <p class="muted" style="margin-bottom:.6rem">Участники ваших групп</p>
   {% if groups %}
   <form method="post" action="/segments/{{ seg.id }}/import-group">
     <div>
@@ -53,7 +53,7 @@
       </div>
     </div>
     <div class="grid" style="margin-top:.6rem">
-      <input name="tag" placeholder="Тег, напр. «вебинар-октябрь» (необязательно)">
+      <input name="tag" placeholder="Тег, напр. «октябрь-2026» (необязательно)">
       <button id="group-submit" disabled>Добавить участников выбранных групп</button>
     </div>
   </form>

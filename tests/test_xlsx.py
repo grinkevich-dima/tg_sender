@@ -152,7 +152,7 @@ def test_sample_file():
     assert any("без распознанной ссылки" in w for w in warns)
     vera = db.val("""SELECT custom_text FROM campaign_leads cl JOIN leads l ON l.id=cl.lead_id
                      WHERE cl.campaign_id=%s AND l.first_name='Вера'""", (cid,))
-    assert vera.startswith("Вера, добрый день! Вы были на нашем вебинаре")      # текст с листа «Тексты», [Имя]
+    assert vera.startswith("Вера, добрый день! Мы делаем сайты для малого бизнеса")      # текст с листа «Тексты», [Имя]
     queued, _ = campaigns.enqueue(cid, campaigns.default_filter(cid))
     order = [r["title"] for r in db.q("""SELECT l.title FROM campaign_leads cl JOIN leads l ON l.id=cl.lead_id
                                          WHERE cl.campaign_id=%s AND cl.state='queued' ORDER BY cl.order_idx""", (cid,))]

@@ -83,7 +83,7 @@
   <a href="https://github.com/grinkevich-dima/tg_sender/blob/main/docs/ai-profiles.md" target="_blank" rel="noopener">как заполнять</a></small></header>
 <input name="name" value="{{ p.name }}" required {% if not can_edit %}readonly{% endif %}>
 <textarea name="instruction" rows="6" {% if not can_edit %}readonly{% endif %} placeholder="Кто пишет: Дмитрий, руководитель веб-агентства. Пиши в мужском роде.
-Кому пишем: собственники, которые были на нашем вебинаре о сайтах.
+Кому пишем: собственники малого бизнеса из нашей группы в Telegram.
 Цель: договориться о бесплатном созвоне на 20–30 минут.
 Как вести: сначала узнай, есть ли задача; по одному вопросу уточни бизнес, текущий сайт, сроки; после 2–3 ответов предложи созвон.
 Тон: на «вы», 2–4 предложения, лёгкий юмор — только если клиент шутит.
@@ -138,7 +138,7 @@
 <p><a href="/ai/sandbox?profile={{ p.id }}" role="button" class="outline" style="width:auto">🧪 Открыть тренажёр с этим профилем</a></p>
 <article>
 <header><strong>Проверить профиль</strong> <small class="muted">· как ИИ ответит на вопрос (ничего никуда не отправляется)</small></header>
-<textarea id="try-q" rows="2" placeholder="Вопрос клиента, напр. «Сколько стоит семинар и где он будет?»"></textarea>
+<textarea id="try-q" rows="2" placeholder="Вопрос клиента, напр. «Сколько стоит и как записаться?»"></textarea>
 <button type="button" id="try-btn" style="width:auto" {% if not ai_on %}disabled{% endif %}>Спросить ИИ</button>
 <pre class="tpl" id="try-a" hidden></pre>
 </article>

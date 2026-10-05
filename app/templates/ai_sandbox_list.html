@@ -14,11 +14,11 @@
     <label>Характер клиента-робота<select name="persona" id="persona">
       {% for k, v in PERSONAS.items() %}<option value="{{ k }}">{{ v[0] }}</option>{% endfor %}</select></label>
   </div>
-  <textarea name="persona_text" id="persona-text" rows="2" hidden placeholder="Опишите клиента: «был на семинаре год назад, интересуется только онлайн-форматом, пишет с ошибками»"></textarea>
+  <textarea name="persona_text" id="persona-text" rows="2" hidden placeholder="Опишите клиента: «общался с нами год назад, интересуется только онлайн-форматом, пишет с ошибками»"></textarea>
   <details><summary class="muted">Вымышленный клиент (ИИ видит его как настоящего)</summary>
   <div class="grid">
     <input name="name" placeholder="Имя (Ирина)">
-    <input name="group" placeholder="Группа, напр. «Вебинар: маркетинг»">
+    <input name="group" placeholder="Группа, напр. «Клуб предпринимателей»">
     <input name="joined" placeholder="Вступил, напр. 20.09.2026">
   </div>
   <div class="grid">

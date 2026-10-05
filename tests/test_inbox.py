@@ -112,8 +112,8 @@ def test_stage_note_optout_via_panel():
     c = browser("admin")
     interest = db.val("SELECT id FROM funnel_stages WHERE name='интерес'")
     c.post(f"/inbox/{lid}/stage", data={"stage_id": interest})
-    c.post(f"/inbox/{lid}/note", data={"note": "Хочет на семинар в ноябре"})
-    assert stage_of(lid) == "интерес" and db.val("SELECT note FROM leads WHERE id=%s", (lid,)) == "Хочет на семинар в ноябре"
+    c.post(f"/inbox/{lid}/note", data={"note": "Хочет консультацию в ноябре"})
+    assert stage_of(lid) == "интерес" and db.val("SELECT note FROM leads WHERE id=%s", (lid,)) == "Хочет консультацию в ноябре"
     funnel = {s["name"]: s["n"] for s in inbox.funnel()}
     assert funnel["интерес"] == 1 and funnel["написали"] == 0
     c.post(f"/inbox/{lid}/optout")

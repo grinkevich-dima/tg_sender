@@ -103,10 +103,10 @@ class GroupClient(FakeClient):
                -1002: [_member(94, "Чужой")]}
 
     async def iter_dialogs(self, limit=None):
-        yield _dialog(-1001, "Вебинар: маркетинг", creator=True, members=3, username="webinar_mkt")
+        yield _dialog(-1001, "Клуб: маркетинг", creator=True, members=3, username="club_mkt")
         yield _dialog(-1002, "Чужой чат")                        # просто участник
         yield _dialog(-1003, "Канал", admin=True, group=False)   # канал — не группа
-        yield _dialog(-1004, "Семинар", admin=True)
+        yield _dialog(-1004, "Встречи", admin=True)
         yield _dialog(-1001234567890, "Закрытый клуб", admin=True)
 
     async def iter_participants(self, peer):
@@ -120,18 +120,18 @@ def test_own_groups_found_and_members_imported():
     run(tgm.refresh_groups(a))
     assert tgm.groups_state[a] == {"running": False, "step": "готово", "groups": 5}
     own = {r["title"] for r in db.q("SELECT title FROM tg_dialogs WHERE account_id=%s", (a,))}
-    assert own == {"Вебинар: маркетинг", "Чужой чат", "Канал", "Семинар", "Закрытый клуб"}
+    assert own == {"Клуб: маркетинг", "Чужой чат", "Канал", "Встречи", "Закрытый клуб"}
 
-    sid = segments.create("Октябрьский вебинар", "", u["id"])
-    assert run(tgm.get(a).import_group_members(-1001, sid, "вебинар")) == (2, 2, 2)   # бот не попал
+    sid = segments.create("Клуб — октябрь", "", u["id"])
+    assert run(tgm.get(a).import_group_members(-1001, sid, "клуб")) == (2, 2, 2)   # бот не попал
     ira = db.one("SELECT * FROM leads WHERE tg_id=91")
-    assert ira["extra"] == {"group": "Вебинар: маркетинг", "joined": "20.09.2026"}
-    assert ira["owner_account_id"] == a and ira["tags"] == ["вебинар"]
+    assert ira["extra"] == {"group": "Клуб: маркетинг", "joined": "20.09.2026"}
+    assert ira["owner_account_id"] == a and ira["tags"] == ["клуб"]
     assert run(tgm.get(a).import_group_members(-1001, sid)) == (2, 0, 0)              # повтор — без дублей
     # переменные попадают в текст
     from app.templating import render
     assert render("{first_name}, спасибо, что пришли в «{group}»!", db.lead_vars(ira)) == \
-        "Ира, спасибо, что пришли в «Вебинар: маркетинг»!"
+        "Ира, спасибо, что пришли в «Клуб: маркетинг»!"
 
 
 def test_import_group_via_panel_checks_account_owner():
@@ -144,9 +144,9 @@ def test_import_group_via_panel_checks_account_owner():
     assert segments.size(sid) == 0                     # чужой аккаунт менеджеру недоступен
     c = browser("admin")
     page_html = c.get(f"/segments/{sid}").text
-    assert "Вебинар: маркетинг" in page_html and 'id="group-q"' in page_html
-    assert "https://web.telegram.org/a/#-1001" in page_html and "https://t.me/webinar_mkt" in page_html
-    assert "tg://resolve?domain=webinar_mkt" in page_html                       # публичная — по username
+    assert "Клуб: маркетинг" in page_html and 'id="group-q"' in page_html
+    assert "https://web.telegram.org/a/#-1001" in page_html and "https://t.me/club_mkt" in page_html
+    assert "tg://resolve?domain=club_mkt" in page_html                       # публичная — по username
     assert "tg://privatepost?channel=1234567890&amp;post=500" in page_html      # без username — через сообщение
     c.post(f"/segments/{sid}/import-group", data={"group": f"{a}:-1001"})
     assert segments.size(sid) == 2

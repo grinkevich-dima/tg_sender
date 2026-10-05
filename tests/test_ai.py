@@ -26,7 +26,7 @@ def fake_ai(monkeypatch):
     return calls, state
 
 
-def profile(name="Вебинар: маркетинг", instruction="Пишет Дмитрий, ведущий вебинара."):
+def profile(name="Сайты: маркетинг", instruction="Пишет Дмитрий, руководитель агентства."):
     return db.ex("INSERT INTO ai_profiles(name, instruction) VALUES (%s, %s) RETURNING id", (name, instruction))
 
 
@@ -35,20 +35,20 @@ def test_build_messages_has_all_four_layers():
     a, lid = _conversation(u)
     pid = profile()
     db.ex("INSERT INTO ai_cards(profile_id, title, body) VALUES (NULL, 'Оплата', 'Оплата картой по ссылке pay.example')")
-    db.ex("INSERT INTO ai_cards(profile_id, title, body) VALUES (%s, 'Запись вебинара', 'Запись доступна 7 дней')", (pid,))
+    db.ex("INSERT INTO ai_cards(profile_id, title, body) VALUES (%s, 'Примеры работ', 'Портфолио на сайте')", (pid,))
     db.ex("INSERT INTO ai_cards(profile_id, title, body) VALUES (%s, 'Чужая карточка', 'не должна попасть')", (profile("Другой", ""),))
-    db.ex("INSERT INTO ai_examples(profile_id, question, answer) VALUES (%s, 'Где запись?', 'Вот ссылка на запись')", (pid,))
-    db.ex("UPDATE leads SET note='Хочет на семинар', extra='{\"group\": \"Вебинар\", \"joined\": \"20.09.2026\"}' WHERE id=%s", (lid,))
+    db.ex("INSERT INTO ai_examples(profile_id, question, answer) VALUES (%s, 'Где посмотреть работы?', 'Вот ссылка на портфолио')", (pid,))
+    db.ex("UPDATE leads SET note='Хочет консультацию', extra='{\"group\": \"Клуб\", \"joined\": \"20.09.2026\"}' WHERE id=%s", (lid,))
     run(tgm.get(a).handle_incoming(500, "А запись будет?", 10))
     lead = db.one("SELECT * FROM leads WHERE id=%s", (lid,))
     msgs, question = ai.build_messages(lead, pid)
     system = msgs[0]["content"]
     assert db.get_setting("ai_base_instruction")[:30] in system                 # 1: общая
     assert "Пишет Дмитрий" in system                                            # 1: профиля
-    assert "Запись доступна 7 дней" in system and "pay.example" in system       # 2: карточки профиля и общие
+    assert "Портфолио на сайте" in system and "pay.example" in system       # 2: карточки профиля и общие
     assert "не должна попасть" not in system
-    assert "Клиент: Где запись?\nМы: Вот ссылка на запись" in system                 # 3: примеры — в инструкции
-    assert "Ира" in system and "Хочет на семинар" in system and "Вебинар, вступил 20.09.2026" in system   # 4
+    assert "Клиент: Где посмотреть работы?\nМы: Вот ссылка на портфолио" in system                 # 3: примеры — в инструкции
+    assert "Ира" in system and "Хочет консультацию" in system and "Клуб, вступил 20.09.2026" in system   # 4
     # переписка — репликами с ролями: наши — assistant, клиента — user
     assert msgs[1:] == [{"role": "assistant", "content": "Привет, Ира!"}, {"role": "user", "content": "А запись будет?"}]
     assert "реплики пользователя (user) — это сообщения клиента" in system
@@ -59,9 +59,9 @@ def test_pick_cards_chooses_relevant_when_many():
     pid = profile()
     for i in range(12):
         db.ex("INSERT INTO ai_cards(profile_id, title, body) VALUES (%s, %s, 'прочее')", (pid, f"Карточка {i}"))
-    db.ex("INSERT INTO ai_cards(profile_id, title, body) VALUES (%s, 'Стоимость семинара', 'Семинар стоит 150 BYN')", (pid,))
-    picked = ai.pick_cards(pid, "Сколько стоит семинар?")
-    assert len(picked) == ai.MAX_CARDS and picked[0]["title"] == "Стоимость семинара"
+    db.ex("INSERT INTO ai_cards(profile_id, title, body) VALUES (%s, 'Стоимость консультации', 'Консультация стоит 150 BYN')", (pid,))
+    picked = ai.pick_cards(pid, "Сколько стоит консультация?")
+    assert len(picked) == ai.MAX_CARDS and picked[0]["title"] == "Стоимость консультации"
 
 
 def test_lead_profile_from_last_campaign():
@@ -92,7 +92,7 @@ def test_draft_and_learning(fake_ai):
 
 
 def test_parse_label():
-    assert ai.parse_label('{"label": "interest", "note": "хочет на семинар"}') == ("interest", "хочет на семинар")
+    assert ai.parse_label('{"label": "interest", "note": "хочет консультацию"}') == ("interest", "хочет консультацию")
     assert ai.parse_label('Вот ответ: {"label":"stop","note":""} готово') == ("stop", "")
     assert ai.parse_label("непонятно") == (None, "")
     assert ai.parse_label('{"label": "maybe"}')[0] is None
@@ -105,7 +105,7 @@ def test_incoming_is_classified_in_background(fake_ai):
     a, lid = _conversation(u)
 
     async def go():
-        await tgm.get(a).handle_incoming(500, "Хочу на семинар, как записаться?", 20)
+        await tgm.get(a).handle_incoming(500, "Хочу на консультацию, как записаться?", 20)
         for _ in range(5):
             await asyncio.sleep(0)
     run(go())
@@ -153,9 +153,9 @@ def test_ai_pages_and_rights(fake_ai):
     make_user("admin")
     make_user("anna", "manager")
     admin, anna = browser("admin"), browser("anna")
-    admin.post("/ai/profiles/create", data={"name": "Семинар"})
-    pid = db.val("SELECT id FROM ai_profiles WHERE name='Семинар'")
-    admin.post(f"/ai/profiles/{pid}", data={"name": "Семинар", "instruction": "Пишет Анна"})
+    admin.post("/ai/profiles/create", data={"name": "Консультации"})
+    pid = db.val("SELECT id FROM ai_profiles WHERE name='Консультации'")
+    admin.post(f"/ai/profiles/{pid}", data={"name": "Консультации", "instruction": "Пишет Анна"})
     admin.post(f"/ai/cards/{pid}/add", data={"title": "Цена", "body": "150 BYN"})
     admin.post("/ai/cards/0/add", data={"title": "Оплата", "body": "картой"})
     admin.post(f"/ai/profiles/{pid}/examples/add", data={"question": "Сколько стоит?", "answer": "150 BYN"})
@@ -168,7 +168,7 @@ def test_ai_pages_and_rights(fake_ai):
     anna.post("/ai/cards/0/add", data={"title": "x", "body": "y"})
     anna.post(f"/ai/profiles/{pid}", data={"name": "Мой", "instruction": "x"})
     assert db.get_setting("ai_base_instruction") != "взлом" and db.val("SELECT COUNT(*) FROM ai_cards") == 2
-    assert db.val("SELECT name FROM ai_profiles WHERE id=%s", (pid,)) == "Семинар"
+    assert db.val("SELECT name FROM ai_profiles WHERE id=%s", (pid,)) == "Консультации"
     # профиль в кампании
     u = db.one("SELECT * FROM users WHERE login='admin'")
     cid = make_campaign(u["id"], [make_account(u["id"])])
@@ -179,8 +179,8 @@ def test_ai_pages_and_rights(fake_ai):
 
 
 def test_no_invented_context_in_opening():
-    """Без данных о знакомстве бот не должен сочинять «вы были на вебинаре» и оставлять заготовки."""
-    assert "вебинар" not in db.get_setting("ai_base_instruction")
+    """Без данных о знакомстве бот не должен сочинять «мы знакомы по …» и оставлять заготовки."""
+    assert "были на наших" not in db.get_setting("ai_base_instruction")
     lead = {"id": 0, "first_name": "Ирина", "last_name": "", "title": None, "extra": {}, "stage_id": None, "note": ""}
     msgs, _ = ai.build_messages(lead, None, history=[])
     assert "не выдумывай" in msgs[-1]["content"] and "квадратных скобках" in msgs[0]["content"]

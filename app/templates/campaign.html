@@ -68,7 +68,7 @@
 {% if chain|length - 1 < max_followups %}
 <details><summary>➕ Добавить дожим</summary>
 <form method="post" action="/campaigns/{{ c.id }}/steps/add">
-  <textarea name="body" rows="4" required placeholder="{first_name}, {напоминаю|подскажу} — запись вебинара доступна до пятницы: …"></textarea>
+  <textarea name="body" rows="4" required placeholder="{first_name}, {напоминаю|подскажу} — предложение действует до пятницы: …"></textarea>
   <div class="grid">
     <label>Через, дней после предыдущего сообщения<input type="number" name="delay_days" min="1" max="60" value="3" required></label>
     <label>Отправить, если<select name="condition">{% for k, v in CONDITIONS.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label>
