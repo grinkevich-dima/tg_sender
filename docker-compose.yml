@@ -54,7 +54,6 @@ services:
     build: { context: ., args: { DEV: "1" } }
     environment:
       TEST_DATABASE_URL: postgresql://tg:${POSTGRES_PASSWORD:-tg}@postgres:5432/tg_test
-      SAMPLE_XLSX: ${SAMPLE_XLSX_IN_CONTAINER:-}
     depends_on:
       postgres: { condition: service_healthy }
     volumes:

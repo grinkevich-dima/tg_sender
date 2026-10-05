@@ -1,6 +1,5 @@
 """Кампании из xlsx: разбор ссылок и файла, фильтры, очередь, поиск получателей, чаты."""
 import io
-import os
 import types
 import zipfile
 from pathlib import Path
@@ -12,8 +11,7 @@ from app.tg import tgm
 from app.xlsx import read_xlsx
 from tests.conftest import FakeClient, drain, make_account, make_lead, make_user, run
 
-SAMPLE = os.environ.get("SAMPLE_XLSX", "")
-needs_sample = pytest.mark.skipif(not SAMPLE or not Path(SAMPLE).exists(), reason="нет файла-образца (SAMPLE_XLSX)")
+SAMPLE_FILE = Path(__file__).resolve().parent.parent / "app" / "static" / "xlsx-sample.xlsx"
 
 
 def test_parse_link():
@@ -140,17 +138,35 @@ def test_resolve_chat_alt_id_and_title():
         run(acc.resolve(db.one("SELECT * FROM leads WHERE id=%s", (by_title,))))
 
 
-@needs_sample
-def test_real_file():
+def test_sample_file():
+    """Образец для пользователей (app/static/xlsx-sample.xlsx, собирается scripts/make_xlsx_sample.py): все
+    возможности формата на вымышленных данных — от импорта до отправки."""
     u = make_user()
-    client = FakeClient()
-    a = make_account(u["id"], client=client, warmup_start=4, warmup_step=0)
-    cid, n, warns = campaigns.import_xlsx(Path(SAMPLE).read_bytes(), "sample.xlsx", u["id"], [a])
+    client = FakeClient(known_usernames={"boris_example": 200000001, "vera_example": 200000002})
+    a = make_account(u["id"], client=client)
+    cid, n, warns = campaigns.import_xlsx(SAMPLE_FILE.read_bytes(), "xlsx-sample.xlsx", u["id"], [a])
     print(n, warns)
-    assert n == 155
+    assert n == 11                                                   # 12 строк, повтор Анны пропущен
+    assert any("повторяющихся" in w for w in warns)
+    assert any("другой чат" in w and "Чужой форум" in w for w in warns)
+    assert any("без распознанной ссылки" in w for w in warns)
+    vera = db.val("""SELECT custom_text FROM campaign_leads cl JOIN leads l ON l.id=cl.lead_id
+                     WHERE cl.campaign_id=%s AND l.first_name='Вера'""", (cid,))
+    assert vera.startswith("Вера, добрый день! Вы были на нашем вебинаре")      # текст с листа «Тексты», [Имя]
     queued, _ = campaigns.enqueue(cid, campaigns.default_filter(cid))
-    assert queued == 105
+    order = [r["title"] for r in db.q("""SELECT l.title FROM campaign_leads cl JOIN leads l ON l.id=cl.lead_id
+                                         WHERE cl.campaign_id=%s AND cl.state='queued' ORDER BY cl.order_idx""", (cid,))]
+    print(order)
+    # «Отправлено…», «Только личные обращения», «Не писать» и строка без ссылки в очередь не попадают
+    assert sorted(order) == sorted(["Клуб предпринимателей", "Маркетинг без воды", "Выпускники курса", "Чужой форум",
+                                    "Анна Иванова", "Борис", "Вера"])
+    assert order.index("Анна Иванова") < order.index("Борис")       # с диалогом — раньше, чем без
     db.ex("UPDATE campaigns SET status='running' WHERE id=%s", (cid,))
-    drain(a, 6)
-    assert len(client.sent) == 4                      # лимит 4 в день
-    assert all(r is None or r > 1 for _, _, r in client.sent)   # тема «General» (_1) → без reply_to
+    drain(a, 10)
+    sent = {e: r for e, _, r in client.sent}
+    assert sent[-1001111111111] == 55                                # тема форума
+    assert sent[-1002222222222] is None                              # тема _1 (General) — общий поток
+    assert sent[-1003333333333] is None                              # тема из другого чата не применена
+    assert -4012345678 in sent and 100000001 in sent                 # обычная группа без -100, человек по ID
+    assert 200000001 in sent and 200000002 in sent                   # по t.me и по @username
+    assert len(client.sent) == 7

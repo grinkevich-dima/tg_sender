@@ -41,7 +41,6 @@ docker compose up -d --build
 
 ```bash
 scripts/test.sh                                         # Postgres и тесты в Docker
-SAMPLE_XLSX=~/путь/к/списку.xlsx scripts/test.sh        # + тест на реальном файле списка
 ```
 
 ## Структура

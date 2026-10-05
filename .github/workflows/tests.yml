@@ -29,6 +29,6 @@ jobs:
           cache-dependency-path: requirements-dev.txt
       - run: pip install -r requirements-dev.txt
       - name: ruff
-        run: ruff check app tests
+        run: ruff check app tests scripts
       - name: pytest
         run: python -m pytest -q -p no:cacheprovider tests
