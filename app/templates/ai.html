@@ -29,6 +29,7 @@
 <form method="post" action="/ai/profiles/create" class="grid">
   <input name="name" placeholder="Название, напр. «Вебинар: маркетинг»" required>
   <button>Создать профиль</button>
+  <button formaction="/ai/wizard/create" class="secondary" title="Ответьте на 12 вопросов о бизнесе — ИИ составит инструкцию и карточки">🪄 Создать с мастером</button>
 </form>
 <small class="muted">Как писать инструкцию, карточки и примеры: <a href="https://github.com/grinkevich-dima/tg_sender/blob/main/docs/ai-profiles.md" target="_blank" rel="noopener">руководство</a>. Профиль подключается к кампании на её странице. В инбоксе черновик строится по профилю кампании, из которой человеку писали последней.</small>
 </article>
@@ -46,4 +47,6 @@
 {% set card_pid = 0 %}{% set can_cards = is_admin %}
 {% include "ai_cards.html" %}
 </article>
+{% set can_gaps = is_admin %}
+{% include "ai_gaps.html" %}
 {% endblock %}

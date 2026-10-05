@@ -9,7 +9,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from . import auth, db, worker
 from .config import ALLOWED_HOSTS, BASE_DIR, SECRET_KEY, SECURE_COOKIES
 from .tg import tgm
-from .web import accounts, ai_routes, campaigns, chat_search, inbox, leads, misc, segments, templates_routes, users
+from .web import accounts, ai_kb_routes, ai_routes, campaigns, chat_search, inbox, leads, misc, segments, templates_routes, users
 
 
 @asynccontextmanager
@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan, title="TG Sender")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "app" / "static")), name="static")
 for r in (users.router, misc.router, accounts.router, leads.router, segments.router, templates_routes.router,
-          campaigns.router, chat_search.router, inbox.router, ai_routes.router):
+          campaigns.router, chat_search.router, inbox.router, ai_routes.router, ai_kb_routes.router):
     app.include_router(r)
 
 # порядок: последний добавленный — внешний. Хост → cookie-сессия → вход и защита форм

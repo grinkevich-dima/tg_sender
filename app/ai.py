@@ -25,6 +25,22 @@ HISTORY = 20
 EXAMPLE_SIMILARITY = 0.9          # отправили почти без правок → удачный пример
 
 
+# заготовка вместо факта («[ссылка]», «[цена]») — нужного факта нет в базе знаний
+PLACEHOLDER_RE = re.compile(r"\[[^\[\]\n]{2,40}\]")
+# «уточню у коллег», «вернусь с ответом» — ИИ не знает ответа
+PROMISE_RE = re.compile(r"\b(уточн\w*|узна\w* у|спрош\w* у|верн\w* с ответ\w*|сверюсь|передам (?:вопрос|коллег))", re.I)
+
+
+def knowledge_gap(text: str) -> str | None:
+    """Почему по ответу ИИ видно, что в базе не хватило фактов (None — не видно)."""
+    hole = PLACEHOLDER_RE.search(text or "")
+    if hole:
+        return f"заготовка {hole.group(0)}"
+    if PROMISE_RE.search(text or ""):
+        return "ИИ пообещал уточнить"
+    return None
+
+
 class AIError(Exception):
     """Понятная пользователю ошибка ИИ (нет ключа, сервис недоступен и т.п.)."""
 
@@ -248,6 +264,10 @@ async def draft(lead_id: int, user_id: int, profile_id: int | None = None) -> di
         raise AIError("ИИ вернул пустой ответ — попробуйте ещё раз")
     did = db.ex("""INSERT INTO ai_drafts(lead_id, profile_id, user_id, question, draft) VALUES (%s,%s,%s,%s,%s)
                    RETURNING id""", (lead_id, profile_id, user_id, question, text))
+    why = knowledge_gap(text)
+    if why and question:
+        from . import ai_kb
+        ai_kb.note_gap(profile_id, question, f"черновик: {why}", "draft", lead_id)
     return {"id": did, "text": text, "profile_id": profile_id}
 
 

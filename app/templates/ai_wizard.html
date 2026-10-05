@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/ai/profiles/{{ p.id }}" class="muted">← {{ p.name }}</a></p>
+<h3>🪄 Мастер профиля «{{ p.name }}»</h3>
+<p class="muted">Ответьте на вопросы о бизнесе — по одному, как в чате. Можно пропускать и возвращаться. ИИ составит инструкцию
+  профиля и стартовые карточки; вы проверите их перед сохранением.</p>
+
+<form method="post" action="/ai/profiles/{{ p.id }}/wizard" id="wiz">
+<div class="chat" id="wiz-chat" style="height:auto;max-height:none;min-height:0;overflow:visible">
+  {% for key, q, hint in questions %}
+  <div class="wiz-step" data-i="{{ loop.index0 }}" style="display:flex;flex-direction:column;gap:.4rem">
+    <div class="msg in"><span class="t"><b>{{ loop.index }}/{{ questions|length }}. {{ q }}</b>
+      <small class="muted" style="display:block">{{ hint }}</small></span></div>
+    <div class="msg out wiz-answer" hidden><span class="t"></span></div>
+    <textarea name="{{ key }}" rows="3" placeholder="Ваш ответ…"></textarea>
+  </div>
+  {% endfor %}
+</div>
+<div class="row-actions" id="wiz-nav">
+  <button type="button" id="wiz-back" class="outline secondary" style="width:auto">← Назад</button>
+  <button type="button" id="wiz-skip" class="outline" style="width:auto">Пропустить</button>
+  <button type="button" id="wiz-next" style="width:auto">Дальше →</button>
+  <small class="muted">Ctrl+Enter — дальше</small>
+</div>
+<p id="wiz-done" hidden>
+  <button {% if not ai_on %}disabled{% endif %} style="width:auto">✨ Собрать профиль</button>
+  <small class="muted">Займёт около минуты. Инструкция и карточки появятся на странице профиля в «Предложениях на проверку».</small>
+</p>
+</form>
+
+<script>
+// без JS видна вся анкета; с JS — по одному вопросу, ответы остаются в чате
+(() => {
+  const steps = [...document.querySelectorAll('.wiz-step')];
+  const nav = document.getElementById('wiz-nav'), done = document.getElementById('wiz-done');
+  let cur = 0;
+  function show() {
+    steps.forEach((s, i) => {
+      const ta = s.querySelector('textarea'), ans = s.querySelector('.wiz-answer');
+      s.hidden = i > cur;
+      ta.hidden = i !== cur;
+      ans.hidden = i >= cur || !ta.value.trim();
+      ans.querySelector('.t').textContent = ta.value.trim();
+    });
+    const finished = cur >= steps.length;
+    done.hidden = !finished;
+    document.getElementById('wiz-next').hidden = finished;
+    document.getElementById('wiz-skip').hidden = finished;
+    document.getElementById('wiz-back').disabled = cur === 0;
+    if (!finished) steps[cur].querySelector('textarea').focus();
+    (finished ? done : steps[cur]).scrollIntoView({block: 'nearest', behavior: 'smooth'});
+  }
+  document.getElementById('wiz-next').onclick = () => { cur++; show(); };
+  document.getElementById('wiz-skip').onclick = () => { steps[cur].querySelector('textarea').value = ''; cur++; show(); };
+  document.getElementById('wiz-back').onclick = () => { cur = Math.max(0, cur - 1); show(); };
+  steps.forEach(s => s.querySelector('textarea').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); cur++; show(); }
+  }));
+  show();
+})();
+</script>
+{% endblock %}

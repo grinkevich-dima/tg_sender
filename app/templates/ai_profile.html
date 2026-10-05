@@ -5,6 +5,78 @@
 {% if campaigns %}<p class="muted">Кампании: {% for c in campaigns %}<a href="/campaigns/{{ c.id }}">{{ c.name }}</a>{{ ', ' if not loop.last }}{% endfor %}</p>
 {% else %}<p class="muted">Ещё не подключён ни к одной кампании — выберите его на странице кампании.</p>{% endif %}
 
+<div id="kb"></div>
+{% if kb_job %}
+<article id="kb-job" {% if kb_job.running %}data-running="1"{% endif %}>
+  {% if kb_job.running %}<p aria-busy="true">⏳ {{ kb_job.what }}: <span id="kb-step">{{ kb_job.step }}</span> · найдено: <span id="kb-found">{{ kb_job.found }}</span></p>
+  {% elif kb_job.error %}<p class="log-error">{{ kb_job.what }}: {{ kb_job.error }}</p>
+  {% else %}<p class="muted">{{ kb_job.what }}: {{ kb_job.step }}</p>{% endif %}
+</article>
+{% endif %}
+
+{% if suggestions %}
+<form method="post" action="/ai/profiles/{{ p.id }}/suggestions">
+<article>
+<header><strong>📝 Предложения на проверку ({{ suggestions|length }})</strong> <small class="muted">· ИИ предложил — сохраняется только отмеченное; текст можно поправить</small></header>
+{% for s in suggestions %}
+<div class="sugg">
+  <label style="margin:0"><input type="checkbox" name="pick" value="{{ s.id }}" {% if s.kind != 'instruction' %}checked{% endif %}>
+    <span class="badge">{{ {'card': 'карточка', 'example': 'пример', 'instruction': 'инструкция'}[s.kind] }}</span>
+    <small class="muted">{{ s.source }}</small></label>
+  {% if s.kind == 'instruction' %}
+    <small class="muted">Заменит текущую инструкцию профиля{% if p.instruction %} (сейчас {{ p.instruction|length }} символов){% endif %} — отметьте, если подходит.</small>
+    <textarea name="body_{{ s.id }}" rows="10">{{ s.body }}</textarea>
+  {% elif s.kind == 'example' %}
+    <textarea name="title_{{ s.id }}" rows="2" title="Что написал клиент">{{ s.title }}</textarea>
+    <textarea name="body_{{ s.id }}" rows="3" title="Наш ответ">{{ s.body }}</textarea>
+  {% else %}
+    <input name="title_{{ s.id }}" value="{{ s.title }}" title="Заголовок — словами клиента">
+    <textarea name="body_{{ s.id }}" rows="3">{{ s.body }}</textarea>
+  {% endif %}
+</div>
+{% endfor %}
+<div class="row-actions">
+  <button name="action" value="accept" style="width:auto">Сохранить отмеченные</button>
+  <button name="action" value="reject" class="outline" style="width:auto">Отклонить отмеченные</button>
+  <button name="action" value="reject_all" class="outline secondary" style="width:auto" onclick="return confirm('Отклонить все предложения?')">Отклонить все</button>
+  <button type="button" class="outline secondary" style="width:auto" onclick="document.querySelectorAll('.sugg input[name=pick]').forEach(c => c.checked = !c.checked)">Инвертировать отметки</button>
+</div>
+</article>
+</form>
+{% endif %}
+
+{% set can_gaps = can_edit %}
+{% include "ai_gaps.html" %}
+
+{% if can_edit %}
+<article>
+<header><strong>⚡ Наполнить базу</strong> <small class="muted">· ИИ предложит карточки и примеры, вы проверите и сохраните нужное</small></header>
+{% if not ai_on %}<p class="log-error">ИИ не настроен — наполнение недоступно.</p>{% endif %}
+<details {% if not cards and not suggestions %}open{% endif %}><summary>📥 Из документа или сайта</summary>
+<form method="post" action="/ai/profiles/{{ p.id }}/import" enctype="multipart/form-data">
+  <label>Файл <small class="muted">PDF, DOCX, TXT, HTML — прайс, коммерческое предложение, описание услуг</small>
+    <input type="file" name="file" accept=".pdf,.docx,.txt,.md,.html,.htm"></label>
+  <label>или ссылка на страницу <input type="url" name="url" placeholder="https://ваш-сайт/услуги"></label>
+  <label>или текст <textarea name="text" rows="4" placeholder="Вставьте текст: описание услуг, цены, частые вопросы…"></textarea></label>
+  <button style="width:auto" {% if not ai_on %}disabled{% endif %}>Разобрать на карточки</button>
+</form>
+</details>
+<details><summary>💬 Из ваших переписок</summary>
+<form method="post" action="/ai/profiles/{{ p.id }}/mine">
+  <p class="muted"><small>ИИ просмотрит диалоги, где отвечали люди, и предложит примеры «клиент → мы» (без имён и телефонов) и карточки с фактами, которые вы называли. Переписки при этом уходят в ИИ-сервис.</small></p>
+  <div class="grid">
+    <label>Диалоги <select name="scope"><option value="profile">кампаний с этим профилем</option><option value="all">все диалоги</option></select></label>
+    <label>За период <select name="days"><option value="30">30 дней</option><option value="90" selected>90 дней</option><option value="180">полгода</option><option value="365">год</option></select></label>
+  </div>
+  <button style="width:auto" {% if not ai_on %}disabled{% endif %}>Собрать</button>
+</form>
+</details>
+<p style="margin:.6rem 0 .3rem"><a href="/ai/profiles/{{ p.id }}/wizard" role="button" class="outline" style="width:auto">🪄 Мастер: ответить на вопросы о бизнесе</a>
+  <button type="button" id="check-btn" class="outline" style="width:auto" {% if not ai_on %}disabled{% endif %}>🔍 Проверить базу</button></p>
+<div id="check-out" hidden></div>
+</article>
+{% endif %}
+
 <form method="post" action="/ai/profiles/{{ p.id }}">
 <article>
 <header><strong>1. Инструкция профиля</strong> <small class="muted">· дополняет общую инструкцию команды ·
@@ -25,6 +97,18 @@
 <header><strong>2. База знаний профиля</strong> <small class="muted">· факты этой кампании: даты, цены, ссылки, ответы на частые вопросы</small></header>
 {% set card_pid = p.id %}{% set can_cards = can_edit %}
 {% include "ai_cards.html" %}
+{% if cards and other_profiles %}
+<details><summary>📋 Скопировать карточки в другой профиль</summary>
+<form method="post" action="/ai/profiles/{{ p.id }}/cards-copy">
+  {% for c in cards %}<label style="margin:.1rem 0"><input type="checkbox" name="card" value="{{ c.id }}"> {{ c.title }}</label>{% endfor %}
+  <div class="grid" style="margin-top:.5rem">
+    <select name="target" required><option value="">— в профиль —</option>{% for o in other_profiles %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}</select>
+    <button style="width:auto">Скопировать отмеченные</button>
+  </div>
+  <small class="muted">Карточки с тем же заголовком в целевом профиле не дублируются.</small>
+</form>
+</details>
+{% endif %}
 </article>
 
 <article>
@@ -63,6 +147,38 @@
 <form method="post" action="/ai/profiles/{{ p.id }}/delete" onsubmit="return confirm('Удалить профиль вместе с его карточками и примерами?')"><button class="outline secondary" style="width:auto">Удалить профиль</button></form>
 {% endif %}
 <script>
+// ход наполнения базы: обновляем, пока идёт, и перезагружаем страницу, когда готово
+const job = document.getElementById('kb-job');
+if (job && job.dataset.running) {
+  const t = setInterval(async () => {
+    try {
+      const j = await (await fetch('/ai/profiles/{{ p.id }}/kb-status')).json();
+      if (j.step) document.getElementById('kb-step').textContent = j.step;
+      if (j.found !== undefined) document.getElementById('kb-found').textContent = j.found;
+      if (!j.running) { clearInterval(t); location.reload(); }
+    } catch (e) {}
+  }, 3000);
+}
+// проверка базы
+document.getElementById('check-btn')?.addEventListener('click', async e => {
+  const out = document.getElementById('check-out');
+  e.target.disabled = true; e.target.textContent = 'Проверяю…'; out.hidden = false; out.textContent = '…';
+  try {
+    const j = await (await fetch('/ai/profiles/{{ p.id }}/check', {method: 'POST'})).json();
+    out.replaceChildren();
+    if (j.error) { out.textContent = 'Ошибка: ' + j.error; }
+    else if (!j.issues.length) { out.textContent = '✅ Замечаний нет'; }
+    else {
+      const ul = document.createElement('ul');
+      for (const i of j.issues) {
+        const li = document.createElement('li'); const b = document.createElement('b');
+        b.textContent = i.type + ': '; li.append(b, i.text); ul.append(li);
+      }
+      out.append(ul);
+    }
+  } catch (err) { out.textContent = 'Ошибка связи'; }
+  e.target.disabled = false; e.target.textContent = '🔍 Проверить базу';
+});
 document.getElementById('try-btn').addEventListener('click', async e => {
   const q = document.getElementById('try-q').value.trim(), a = document.getElementById('try-a');
   if (!q) return;

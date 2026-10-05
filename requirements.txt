@@ -9,3 +9,4 @@ python-dotenv==1.2.3
 qrcode==8.2
 psycopg[binary,pool]==3.2.10
 itsdangerous==2.2.0
+pypdf==6.19.0               # текст из PDF для импорта в базу знаний ИИ

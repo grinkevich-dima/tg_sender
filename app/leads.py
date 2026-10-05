@@ -162,6 +162,7 @@ def purge(lead_id: int, keep_in_stoplist: bool = True) -> bool:
         return False
     with db.tx():
         db.ex("DELETE FROM ai_examples WHERE lead_id=%s", (lead_id,))
+        db.ex("DELETE FROM ai_gaps WHERE lead_id=%s", (lead_id,))
         db.ex("DELETE FROM ai_reply_jobs WHERE lead_id=%s", (lead_id,))
         if lead["tg_id"]:
             db.ex("DELETE FROM tg_dialogs WHERE peer_id=%s", (lead["tg_id"],))

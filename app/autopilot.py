@@ -38,7 +38,7 @@ AUTOPILOT_RULE = (
     "раздражение) — не отвечай клиенту, а напиши строго одну строку: HANDOFF: <причина, до 10 слов>.")
 
 # ИИ пообещал уточнить — значит, ответ за человеком: ставим «нужен человек», чтобы клиент не повис
-PROMISE_RE = re.compile(r"\b(уточн\w*|узна\w* у|спрош\w* у|верн\w* с ответ\w*|сверюсь|передам (?:вопрос|коллег))", re.I)
+PROMISE_RE = ai.PROMISE_RE
 
 # ---------- проверка ответа перед отправкой (защита от манипуляций текстом клиента) ----------
 MAX_REPLY = 900
@@ -74,7 +74,7 @@ def check_reply(text: str, profile_id: int | None) -> str | None:
 
 
 # заготовка вместо факта («[ссылка]», «[цена]») — у ИИ нет нужного факта в базе знаний; такое не отправляем
-PLACEHOLDER_RE = re.compile(r"\[[^\[\]\n]{2,40}\]")
+PLACEHOLDER_RE = ai.PLACEHOLDER_RE
 
 
 
@@ -277,8 +277,12 @@ async def _send_job(job: dict) -> str:
         return "handoff"
 
     started = db.now_utc()          # всё, что клиент пришлёт после этого момента, войдёт в следующий ответ (A1)
-    msgs, _ = ai.build_messages(lead, job["profile_id"])
+    msgs, question = ai.build_messages(lead, job["profile_id"])
     msgs[0]["content"] += "\n\n" + AUTOPILOT_RULE
+
+    def gap(reason: str) -> None:       # ИИ не хватило фактов — вопрос в «Нет ответа в базе» профиля
+        from . import ai_kb
+        ai_kb.note_gap(job["profile_id"], question, reason, "autopilot", lead_id)
     try:
         text = (await ai.chat(msgs)).strip()
     except ai.AIError as e:
@@ -292,10 +296,13 @@ async def _send_job(job: dict) -> str:
         notify.admin(f"🤖 ИИ недоступен — автоответы передаются людям: {e}"[:400], key="ai-down")
         return "handoff"
     if not text or text.upper().startswith("HANDOFF"):
-        handoff(lead_id, text.split(":", 1)[1].strip() if ":" in text else "ИИ не смог ответить", acc_id)
+        reason = text.split(":", 1)[1].strip() if ":" in text else "ИИ не смог ответить"
+        handoff(lead_id, reason, acc_id)
+        gap(f"автоответ: передал человеку — {reason}")
         return "handoff"
     hole = PLACEHOLDER_RE.search(text)
     if hole:
+        gap(f"автоответ: заготовка {hole.group(0)}")
         handoff(lead_id, f"в базе знаний нет нужного факта: ИИ написал {hole.group(0)}", acc_id)
         return "handoff"
     problem = check_reply(text, job["profile_id"])
@@ -342,6 +349,7 @@ async def _send_job(job: dict) -> str:
     inbox.record(acc_id, lead_id, "out", text, sent.id, "ai")
     _finish(jid, "sent", None, text)
     if PROMISE_RE.search(text):
+        gap("автоответ: ИИ пообещал уточнить")
         db.ex("UPDATE leads SET ai_handoff=%s, ai_handoff_at=now() WHERE id=%s",
               ("ИИ пообещал уточнить — нужен ответ человека", lead_id))
         return "sent"

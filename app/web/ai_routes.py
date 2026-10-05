@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Form, Request
 from psycopg.errors import UniqueViolation
 
-from .. import ai, auth, db, sandbox
+from .. import ai, ai_kb, auth, db, sandbox
 from ..config import AI_BASE_URL, AI_MODEL
 from ..templating import render
 from .common import back, page, user
@@ -30,6 +30,7 @@ async def ai_page(request: Request):
     use7, use30 = await ai.usage(7), await ai.usage(30)
     return page(request, "ai.html", profiles=profiles, base=db.get_setting("ai_base_instruction"), use7=use7, use30=use30,
                 cards=db.q("SELECT * FROM ai_cards WHERE profile_id IS NULL ORDER BY id"), drafts=drafts,
+                gaps=ai_kb.gaps(None), gap_pid=0,
                 status=await ai.status(), model=AI_MODEL, base_url=AI_BASE_URL)
 
 
@@ -59,7 +60,11 @@ async def profile_page(request: Request, pid: int):
     prof = _profile(pid)
     if not prof:
         return back("/ai", err="Профиль не найден")
-    return page(request, "ai_profile.html", p=prof, can_edit=_can_edit(user(request), prof),
+    u = user(request)
+    others = [p for p in db.q("SELECT * FROM ai_profiles WHERE id != %s ORDER BY name", (pid,)) if _can_edit(u, p)]
+    return page(request, "ai_profile.html", p=prof, can_edit=_can_edit(u, prof),
+                suggestions=ai_kb.suggestions(pid), gaps=ai_kb.gaps(pid), gap_pid=pid, kb_job=ai_kb.jobs.get(pid),
+                other_profiles=others,
                 cards=db.q("SELECT * FROM ai_cards WHERE profile_id=%s ORDER BY id", (pid,)),
                 examples=db.q("SELECT * FROM ai_examples WHERE profile_id=%s ORDER BY active DESC, created_at DESC", (pid,)),
                 campaigns=db.q("SELECT id, name FROM campaigns WHERE ai_profile_id=%s ORDER BY id DESC", (pid,)),

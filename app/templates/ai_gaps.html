@@ -1,0 +1,23 @@
+{# «Нет ответа в базе»: ожидает gaps, gap_pid (0 — общая база), can_gaps #}
+{% if gaps %}
+<article id="gaps">
+<header><strong>❓ Нет ответа в базе ({{ gaps|length }})</strong> <small class="muted">· на этих вопросах ИИ не хватило фактов:
+  передал диалог человеку, оставил заготовку «[…]» или пообещал уточнить. Ответьте один раз — ответ станет карточкой.</small></header>
+{% for g in gaps %}
+<details style="margin-bottom:.4rem"><summary><b>{{ g.question[:140] }}{% if g.question|length > 140 %}…{% endif %}</b>
+  <small class="muted">· {{ g.reason or '' }}{% if g.hits > 1 %} · спрашивали {{ g.hits }} раз{% endif %} · {{ g.last_at|dt }}</small></summary>
+  {% if g.question|length > 140 %}<pre class="tpl">{{ g.question }}</pre>{% endif %}
+  {% if can_gaps %}
+  <form method="post" action="/ai/gaps/{{ gap_pid }}/{{ g.id }}/answer" id="gap-{{ g.id }}">
+    <input name="title" value="{{ g.question[:120] }}" required title="Заголовок карточки — словами клиента">
+    <textarea name="body" rows="3" required placeholder="Ответ фактами: цены, сроки, условия, ссылка. ИИ будет отвечать по нему."></textarea>
+  </form>
+  <div class="row-actions">
+    <button form="gap-{{ g.id }}" style="width:auto">Сделать карточкой</button>
+    <form method="post" action="/ai/gaps/{{ gap_pid }}/{{ g.id }}/dismiss" style="display:inline"><button class="outline secondary" style="width:auto">Не нужно</button></form>
+  </div>
+  {% endif %}
+</details>
+{% endfor %}
+</article>
+{% endif %}

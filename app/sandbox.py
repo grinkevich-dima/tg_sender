@@ -62,10 +62,14 @@ async def bot_reply(sid: int) -> dict:
     """Ответ бота на текущую переписку + что он видел (debug)."""
     s = get(sid)
     debug: dict = {}
-    msgs, _ = ai.build_messages(fake_lead(s["client"]), s["profile_id"], history=_history(sid), debug=debug)
+    msgs, question = ai.build_messages(fake_lead(s["client"]), s["profile_id"], history=_history(sid), debug=debug)
     text = await ai.chat(msgs)
     if not text:
         raise ai.AIError("ИИ вернул пустой ответ — попробуйте ещё раз")
+    why = ai.knowledge_gap(text)
+    if why and question:
+        from . import ai_kb
+        ai_kb.note_gap(s["profile_id"], question, f"тренажёр: {why}", "sandbox")
     mid = db.ex("INSERT INTO ai_sandbox_messages(sandbox_id, role, text, debug) VALUES (%s, 'bot', %s, %s) RETURNING id",
                 (sid, text, db.jsonb(debug)))
     return {"id": mid, "text": text}
