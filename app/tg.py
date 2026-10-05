@@ -56,7 +56,7 @@ class AccountClient(LoginMixin, GroupsMixin):
         await self.client.connect()
         if await self.client.is_user_authorized():
             try:
-                await self._on_login("Аккаунт подключён")
+                await self._on_login(None)      # при каждом запуске панели — без записи; итог пишет start_all
             except DuplicateAccount:
                 pass
 
@@ -321,12 +321,17 @@ class TgPool:
         if not configured():
             db.log("TG_API_ID / TG_API_HASH не заданы в .env — подключение аккаунтов невозможно", "error")
             return
-        for a in db.q("SELECT id FROM tg_accounts WHERE status IN ('active', 'paused') ORDER BY id"):
+        rows = db.q("SELECT id FROM tg_accounts WHERE status IN ('active', 'paused') ORDER BY id")
+        for a in rows:
             acc = self.get(a["id"])
             try:
                 await acc.start()
             except Exception as e:
                 db.log(f"Не удалось подключить аккаунт: {type(e).__name__}: {e}", "error", a["id"])
+        ok = [self.get(a["id"]) for a in rows if self.get(a["id"]).authorized]
+        names = ", ".join(c.display() for c in ok)
+        db.log(f"Панель запущена: подключено аккаунтов {len(ok)} из {len(rows)}" + (f" ({names})" if names else ""),
+               "info" if len(ok) == len(rows) else "warn")
 
     async def stop_all(self):
         for acc in self.accounts.values():

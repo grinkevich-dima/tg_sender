@@ -16,7 +16,8 @@ class DuplicateAccount(Exception):
 
 
 class LoginMixin:
-    async def _on_login(self, what: str):
+    async def _on_login(self, what: str | None):
+        """Аккаунт авторизован: запоминаем, кто это. what — запись в журнал (None — без записи, например при запуске панели)."""
         me = await self.client.get_me()
         other = db.one("SELECT id FROM tg_accounts WHERE tg_user_id=%s AND id!=%s", (me.id, self.id))
         if other:
@@ -28,7 +29,8 @@ class LoginMixin:
         db.ex("""UPDATE tg_accounts SET tg_user_id=%s, username=%s, first_name=%s, last_name=%s, phone=%s,
                  status=CASE WHEN status IN ('new','logged_out') THEN 'active' ELSE status END WHERE id=%s""",
               (me.id, me.username, me.first_name, me.last_name, f"+{me.phone}" if me.phone else None, self.id))
-        db.log(f"{what}: {self.display()}", account_id=self.id)
+        if what:
+            db.log(f"{what}: {self.display()}", account_id=self.id)
 
     # ---------- вход по коду ----------
     async def send_code(self, phone: str) -> str:

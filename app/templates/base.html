@@ -7,6 +7,7 @@
 <style>
   :root { --pico-font-size: 15px; }
   nav.top { border-bottom: 1px solid var(--pico-muted-border-color); margin-bottom: 1rem; }
+  nav.top .nav-menu a[aria-current="page"] { color: var(--pico-primary); font-weight: 600; box-shadow: inset 0 -2px 0 var(--pico-primary); border-radius: 0; }
   .grid-stats { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap: .75rem; margin-bottom:1rem; }
   .stat { padding: .8rem 1rem; border:1px solid var(--pico-muted-border-color); border-radius: 8px; }
   .stat b { display:block; font-size: 1.6rem; }
@@ -107,19 +108,21 @@
   {% if user %}
   <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-hidden="true" tabindex="-1">
   <label for="nav-toggle" class="nav-burger" aria-label="Меню" role="button" tabindex="0">☰</label>
+  {# пункт активен на своей странице и на всех вложенных: /campaigns/5, /ai/sandbox… #}
+  {% macro cur(prefix) %}{% set path = request.url.path %}{% if path == prefix or (prefix != '/' and path.startswith(prefix ~ '/')) %} aria-current="page"{% endif %}{% endmacro %}
   <ul class="nav-menu">
-    <li><a href="/">Дашборд</a></li>
-    <li><a href="/inbox">Инбокс{% if menu_unread %} <span class="badge b-replied" id="menu-unread">{{ menu_unread }}</span>{% endif %}</a></li>
-    <li><a href="/campaigns">Кампании</a></li>
-    <li><a href="/segments">Сегменты</a></li>
-    <li><a href="/chat-search">Поиск групп</a></li>
-    <li><a href="/leads">Лиды</a></li>
-    <li><a href="/templates">Шаблоны</a></li>
-    <li><a href="/ai">ИИ</a></li>
-    <li><a href="/accounts">Аккаунты</a></li>
-    {% if is_admin %}<li><a href="/users">Команда</a></li><li><a href="/settings">Правила</a></li>{% endif %}
-    <li><a href="/log">Журнал</a></li>
-    <li><a href="/me">👤 {{ user.name }}</a></li>
+    <li><a href="/"{{ cur('/') }}>Дашборд</a></li>
+    <li><a href="/inbox"{{ cur('/inbox') }}>Инбокс{% if menu_unread %} <span class="badge b-replied" id="menu-unread">{{ menu_unread }}</span>{% endif %}</a></li>
+    <li><a href="/campaigns"{{ cur('/campaigns') }}>Кампании</a></li>
+    <li><a href="/segments"{{ cur('/segments') }}>Сегменты</a></li>
+    <li><a href="/chat-search"{{ cur('/chat-search') }}>Поиск групп</a></li>
+    <li><a href="/leads"{{ cur('/leads') }}>Лиды</a></li>
+    <li><a href="/templates"{{ cur('/templates') }}>Шаблоны</a></li>
+    <li><a href="/ai"{{ cur('/ai') }}>ИИ</a></li>
+    <li><a href="/accounts"{{ cur('/accounts') }}>Аккаунты</a></li>
+    {% if is_admin %}<li><a href="/users"{{ cur('/users') }}>Команда</a></li><li><a href="/settings"{{ cur('/settings') }}>Правила</a></li>{% endif %}
+    <li><a href="/log"{{ cur('/log') }}>Журнал</a></li>
+    <li><a href="/me"{{ cur('/me') }}>👤 {{ user.name }}</a></li>
     <li><form method="post" action="/logout"><button class="outline secondary">Выйти</button></form></li>
   </ul>
   {% endif %}

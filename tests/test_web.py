@@ -259,3 +259,18 @@ def test_xlsx_bomb_rejected():
         z.writestr("xl/workbook.xml", b"0" * (101 * 1024 * 1024))           # сжимается в килобайты
     with pytest.raises(ValueError, match="слишком большой после распаковки"):
         read_xlsx(buf.getvalue())
+
+
+def test_menu_highlights_current_section():
+    """Пункт меню подсвечен на своей странице и на вложенных; «Дашборд» — только на главной."""
+    import re
+    make_user("admin")
+    c = browser("admin")
+
+    def current(url):
+        menu = c.get(url).text.split('class="nav-menu"', 1)[1].split("</ul>", 1)[0]
+        return re.findall(r'<a href="([^"]+)" aria-current="page"', menu)
+    assert current("/") == ["/"]
+    assert current("/ai/sandbox") == ["/ai"]
+    assert current("/campaigns") == ["/campaigns"]
+    assert current("/chat-search") == ["/chat-search"]
