@@ -30,7 +30,7 @@ def setup(user_login="admin", autoreply=True, tg_id=500):
     from tests.conftest import make_user
     u = make_user(user_login)
     a, lid = _conversation(u, tg_id=tg_id)
-    db.ex("UPDATE tg_accounts SET work_start='00:00', work_end='23:59'")
+    db.ex("UPDATE tg_accounts SET work_start='00:00', work_end='00:00'")
     db.ex("UPDATE campaigns SET ai_autoreply=%s", (autoreply,))
     return u, a, lid
 

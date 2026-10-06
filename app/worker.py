@@ -73,9 +73,13 @@ def followup_quota_used(acc: dict) -> bool:
 
 
 def in_work_hours(acc: dict, now: datetime | None = None) -> bool:
+    """Рабочие часы по поясу аккаунта. Конец раньше начала — через полночь (22:00–06:00);
+    одинаковые начало и конец — круглосуточно."""
     now = (now or db.now_utc()).astimezone(db.account_tz(acc))
     a, b, t = acc["work_start"], acc["work_end"], now.time()
-    return a <= t < b if a <= b else (t >= a or t < b)
+    if a == b:
+        return True
+    return a <= t < b if a < b else (t >= a or t < b)
 
 
 def paused_until(acc: dict) -> datetime | None:

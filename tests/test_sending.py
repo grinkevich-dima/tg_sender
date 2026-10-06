@@ -135,3 +135,19 @@ def test_forum_topic_reply_to():
     drain(a, 3)
     assert sorted(r for _, _, r in c.sent if r) == [29438]
     assert len(c.sent) == 2
+
+
+def test_work_hours_edges():
+    """Через полночь, круглосуточно и последняя минута суток (раньше 00:00–23:59 «не работал» в 23:59)."""
+    from datetime import datetime, time
+    tz = db.now_local().tzinfo
+
+    def at(h, m, s=0):
+        return datetime(2026, 10, 5, h, m, s, tzinfo=tz)
+    acc = {"work_start": time(10, 0), "work_end": time(20, 0), "tz": None}
+    assert worker.in_work_hours(acc, at(10, 0)) and not worker.in_work_hours(acc, at(20, 0))
+    night = {"work_start": time(22, 0), "work_end": time(6, 0), "tz": None}
+    assert worker.in_work_hours(night, at(23, 30)) and worker.in_work_hours(night, at(5, 59))
+    assert not worker.in_work_hours(night, at(12, 0))
+    always = {"work_start": time(0, 0), "work_end": time(0, 0), "tz": None}
+    assert all(worker.in_work_hours(always, at(h, m, s)) for h, m, s in [(0, 0, 0), (12, 0, 0), (23, 59, 30)])

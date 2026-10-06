@@ -116,7 +116,7 @@ def make_user(login="admin", role="admin", name=None) -> dict:
 
 def make_account(user_id: int, label="A", tg_user_id=None, client=None, **settings) -> int:
     cols = {"user_id": user_id, "label": label, "status": "active", "tg_user_id": tg_user_id,
-            "first_name": label, "work_start": "00:00", "work_end": "23:59", "delay_min": 0, "delay_max": 0,
+            "first_name": label, "work_start": "00:00", "work_end": "00:00", "delay_min": 0, "delay_max": 0,
             **settings}
     aid = db.ex(f"INSERT INTO tg_accounts({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))}) RETURNING id",
                 tuple(cols.values()))
